@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Config for BlockAccessibilityService. Listens for window-state changes so
+     it can read the foreground package name and, if that package is currently
+     locked, immediately send the user home. canPerformGestures is requested so
+     performGlobalAction(GLOBAL_ACTION_HOME) is available. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:description="@string/accessibility_description" />

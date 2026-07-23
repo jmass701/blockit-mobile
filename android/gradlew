@@ -1,0 +1,8 @@
+#!/bin/sh
+# Gradle start-up script (standard Flutter/Gradle wrapper).
+# NOTE: gradle/wrapper/gradle-wrapper.jar is a binary that must be regenerated
+# on first checkout — Android Studio does this automatically on Gradle sync, or
+# run `gradle wrapper --gradle-version 8.4` in this directory.
+APP_HOME=$(cd "$(dirname "$0")" && pwd)
+CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+exec java -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

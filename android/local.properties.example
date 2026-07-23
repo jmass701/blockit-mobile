@@ -1,0 +1,4 @@
+# Copy to local.properties and set to your machine's paths. `flutter pub get`
+# / opening in Android Studio usually generates this for you.
+sdk.dir=/path/to/Android/sdk
+flutter.sdk=/path/to/flutter

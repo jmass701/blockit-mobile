@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BlockIT</string>
+    <string name="accessibility_description">BlockIT uses the accessibility service to detect when a blocked app is opened and return you to the home screen. It reads only the foreground app\'s package name and never collects screen content.</string>
+</resources>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- White shield foreground, matching the web dashboard's logo glyph. Drawn on
+     the 108dp adaptive-icon canvas (72dp safe zone). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 L74,38 L74,54 C74,66 66,76 54,82 C42,76 34,66 34,54 L34,38 Z" />
+</vector>
