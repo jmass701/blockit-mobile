@@ -9,6 +9,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../models/blocked_item.dart';
 import '../services/local_api_service.dart';
 import '../theme/app_theme.dart';
 import 'countdown_text.dart';

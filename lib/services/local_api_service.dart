@@ -58,7 +58,7 @@ class ItemStatus {
     required this.item,
     required this.locked,
     this.unlockedUntil,
-    this.unlockedIndefinitely,
+    this.unlockedIndefinitely = false,
   });
 }
 
