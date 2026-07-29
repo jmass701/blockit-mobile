@@ -301,4 +301,29 @@ class LocalApiService {
         cfg.copyWith(gmailAddress: gmail, gmailAppPassword: pw));
     return const ApiResult(ok: true);
   }
+
+  /// Adds a carrier email-to-SMS gateway address (e.g. "5551234567@vtext.com")
+  /// that tamper alerts also get sent to. No approval needed — unlike partner
+  /// changes, this doesn't affect who can approve unlock/blocklist requests.
+  Future<ApiResult> smsGatewaysAdd(String address) async {
+    final addr = address.trim();
+    if (addr.isEmpty || !addr.contains('@')) {
+      return ApiResult.error('Enter a valid gateway address, e.g. '
+          '5551234567@vtext.com.');
+    }
+    final cfg = await _storage.loadConfig();
+    if (cfg.tamperAlertSmsGateways.contains(addr)) {
+      return const ApiResult(ok: true, immediate: true, added: false);
+    }
+    cfg.tamperAlertSmsGateways.add(addr);
+    await _storage.saveConfig(cfg);
+    return const ApiResult(ok: true, immediate: true, added: true);
+  }
+
+  Future<ApiResult> smsGatewaysRemove(String address) async {
+    final cfg = await _storage.loadConfig();
+    cfg.tamperAlertSmsGateways.remove(address.trim());
+    await _storage.saveConfig(cfg);
+    return const ApiResult(ok: true, immediate: true);
+  }
 }

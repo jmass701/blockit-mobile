@@ -21,6 +21,12 @@ class AppConfig {
   String gmailAppPassword;
   List<String> approverEmails;
 
+  /// Carrier email-to-SMS gateway addresses (e.g. "5551234567@vtext.com") that
+  /// tamper alerts (uninstall attempt / accessibility disabled / VPN revoked)
+  /// also get sent to, in addition to approverEmails. Optional — purely a
+  /// convenience so the approver gets a text, not just an email.
+  List<String> tamperAlertSmsGateways;
+
   /// Fixed at 10s, mirroring CONFIG_DEFAULTS["check_interval_seconds"] — the
   /// engine re-checks locks and polls IMAP on this cadence. Not user-editable.
   final int checkIntervalSeconds;
@@ -38,10 +44,12 @@ class AppConfig {
     this.gmailAddress = '',
     this.gmailAppPassword = '',
     List<String>? approverEmails,
+    List<String>? tamperAlertSmsGateways,
     this.checkIntervalSeconds = 10,
     this.unlockDurationDefault = 30,
     this.cooldownBetweenUnlockRequestsMinutes = 10,
-  }) : approverEmails = approverEmails ?? <String>[];
+  })  : approverEmails = approverEmails ?? <String>[],
+        tamperAlertSmsGateways = tamperAlertSmsGateways ?? <String>[];
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
     // Support the legacy single "approver_email" field the same way load_config
@@ -57,10 +65,16 @@ class AppConfig {
           ? <String>[legacy.toString()]
           : <String>[];
     }
+    final smsGateways = (json['tamper_alert_sms_gateways'] is List)
+        ? (json['tamper_alert_sms_gateways'] as List)
+            .map((e) => e.toString())
+            .toList()
+        : <String>[];
     return AppConfig(
       gmailAddress: (json['gmail_address'] ?? '').toString(),
       gmailAppPassword: (json['gmail_app_password'] ?? '').toString(),
       approverEmails: approvers,
+      tamperAlertSmsGateways: smsGateways,
       // check_interval_seconds and cooldown are FORCED to their defaults on
       // every load in the Windows app (see _FORCED_KEYS) — do the same here so
       // a stale saved value can't override them.
@@ -74,6 +88,7 @@ class AppConfig {
         'gmail_address': gmailAddress,
         'gmail_app_password': gmailAppPassword,
         'approver_emails': approverEmails,
+        'tamper_alert_sms_gateways': tamperAlertSmsGateways,
         'unlock_duration_minutes': unlockDurationDefault,
         'check_interval_seconds': checkIntervalSeconds,
         'cooldown_between_unlock_requests_minutes':
@@ -97,11 +112,14 @@ class AppConfig {
     String? gmailAddress,
     String? gmailAppPassword,
     List<String>? approverEmails,
+    List<String>? tamperAlertSmsGateways,
   }) =>
       AppConfig(
         gmailAddress: gmailAddress ?? this.gmailAddress,
         gmailAppPassword: gmailAppPassword ?? this.gmailAppPassword,
         approverEmails: approverEmails ?? List<String>.from(this.approverEmails),
+        tamperAlertSmsGateways: tamperAlertSmsGateways ??
+            List<String>.from(this.tamperAlertSmsGateways),
         checkIntervalSeconds: checkIntervalSeconds,
         unlockDurationDefault: unlockDurationDefault,
         cooldownBetweenUnlockRequestsMinutes:

@@ -28,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _gmailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _partnerController = TextEditingController();
+  final _smsGatewayController = TextEditingController();
 
   bool _gmailOpen = false;
   bool _obscurePassword = true;
@@ -36,6 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _pendingRemovals = [];
   List<String> _pendingAdds = [];
   List<String> _pendingInvites = [];
+  List<String> _smsGateways = [];
   String? _error;
   bool _loading = true;
 
@@ -58,6 +60,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _pendingRemovals = _detailsOf(pending, RequestType.partnerRemove);
       _pendingAdds = _detailsOf(pending, RequestType.partnerAdd);
       _pendingInvites = _detailsOf(pending, RequestType.partnerInvite);
+      _smsGateways = cfg.tamperAlertSmsGateways;
       // Auto-expand the Gmail section when it isn't configured yet.
       _gmailOpen =
           cfg.gmailAddress.isEmpty || cfg.gmailAppPassword.isEmpty;
@@ -73,6 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _gmailController.dispose();
     _passwordController.dispose();
     _partnerController.dispose();
+    _smsGatewayController.dispose();
     super.dispose();
   }
 
@@ -128,6 +132,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _load();
   }
 
+  Future<void> _addSmsGateway() async {
+    final addr = _smsGatewayController.text.trim();
+    if (addr.isEmpty) return;
+    final res = await _api.smsGatewaysAdd(addr);
+    if (res.ok) {
+      _smsGatewayController.clear();
+      _toast(res.added ? 'Added "$addr"' : '"$addr" is already added');
+    } else {
+      _toast(res.error ?? 'Could not add that address', error: true);
+    }
+    await _load();
+  }
+
+  Future<void> _removeSmsGateway(String addr) async {
+    await _api.smsGatewaysRemove(addr);
+    _toast('Removed "$addr"');
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -152,6 +175,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _gmailSection(),
           const Divider(height: 40, color: AppColors.gray200),
           _partnerSection(),
+          const Divider(height: 40, color: AppColors.gray200),
+          _smsGatewaySection(),
         ],
       ),
     );
@@ -294,6 +319,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'first partner approves, then the new person gets their own invite '
           'email and has to accept it themselves. (The very first partner you '
           'add goes through instantly.)',
+          style: TextStyle(
+              fontSize: 12, color: AppColors.gray500, height: 1.5),
+        ),
+      ],
+    );
+  }
+
+  Widget _smsGatewaySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('TEXT ALERTS (OPTIONAL)', style: AppTheme.sectionLabel()),
+        const SizedBox(height: 10),
+        if (_smsGateways.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text('No text-alert addresses yet.',
+                style: TextStyle(color: AppColors.gray500)),
+          )
+        else
+          for (final addr in _smsGateways)
+            _partnerRow(
+              addr,
+              trailing: TextButton(
+                onPressed: () => _removeSmsGateway(addr),
+                style: TextButton.styleFrom(
+                    foregroundColor: AppColors.red,
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 0),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                child: const Text('Remove',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+            ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _smsGatewayController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                    hintText: 'e.g. 5551234567@vtext.com'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+                onPressed: _addSmsGateway, child: const Text('Add')),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          "Tamper alerts (uninstall attempt, blocking turned off) also get "
+          "sent here as a text, via your carrier's email-to-SMS gateway — "
+          "find yours by searching \"[your carrier] email to text\". "
+          "Regular unlock/blocklist approval emails are NOT duplicated "
+          "here, only tamper alerts. Not all carriers support this (AT&T "
+          "notably doesn't).",
           style: TextStyle(
               fontSize: 12, color: AppColors.gray500, height: 1.5),
         ),

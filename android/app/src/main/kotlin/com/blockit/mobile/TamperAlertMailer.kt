@@ -64,23 +64,30 @@ object TamperAlertMailer {
     private data class MailConfig(
         val gmailAddress: String,
         val appPassword: String,
-        val approverEmails: List<String>,
+        // Approver emails + carrier email-to-SMS gateway addresses, combined —
+        // both are just RCPT TO targets for the same short alert message.
+        val recipients: List<String>,
     )
 
     private fun readConfig(context: Context): MailConfig? {
         val cfg = JsonState.readConfigJson(context) ?: return null
         val address = cfg.optString("gmail_address", "").trim()
         val password = cfg.optString("gmail_app_password", "").trim()
-        val approversArr = cfg.optJSONArray("approver_emails")
-        val approvers = mutableListOf<String>()
-        if (approversArr != null) {
-            for (i in 0 until approversArr.length()) {
-                val e = approversArr.optString(i, "").trim()
-                if (e.isNotEmpty()) approvers.add(e)
+        val recipients = mutableListOf<String>()
+        cfg.optJSONArray("approver_emails")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val e = arr.optString(i, "").trim()
+                if (e.isNotEmpty()) recipients.add(e)
             }
         }
-        if (address.isEmpty() || password.isEmpty() || approvers.isEmpty()) return null
-        return MailConfig(address, password, approvers)
+        cfg.optJSONArray("tamper_alert_sms_gateways")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val e = arr.optString(i, "").trim()
+                if (e.isNotEmpty() && e !in recipients) recipients.add(e)
+            }
+        }
+        if (address.isEmpty() || password.isEmpty() || recipients.isEmpty()) return null
+        return MailConfig(address, password, recipients)
     }
 
     private fun subjectAndBodyFor(reason: String): Pair<String, String> = when (reason) {
@@ -138,11 +145,11 @@ object TamperAlertMailer {
             command(Base64.encodeToString(cfg.gmailAddress.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
             command(Base64.encodeToString(cfg.appPassword.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
             command("MAIL FROM:<${cfg.gmailAddress}>")
-            for (to in cfg.approverEmails) {
+            for (to in cfg.recipients) {
                 command("RCPT TO:<$to>")
             }
             command("DATA")
-            val toHeader = cfg.approverEmails.joinToString(", ")
+            val toHeader = cfg.recipients.joinToString(", ")
             val message = buildString {
                 append("From: BlockIT <${cfg.gmailAddress}>\r\n")
                 append("To: $toHeader\r\n")
