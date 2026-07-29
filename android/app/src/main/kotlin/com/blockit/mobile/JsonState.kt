@@ -36,6 +36,23 @@ object JsonState {
         }
     }
 
+    /**
+     * Public read of config.json, for callers (e.g. TamperAlertMailer) that need
+     * the Gmail address/app password/approver list straight off disk, the same
+     * way this object already reads blocklist.json/state.json directly.
+     * Returns null if the file doesn't exist yet (not configured).
+     */
+    fun readConfigJson(context: Context): JSONObject? {
+        val f = File(dataDir(context), "config.json")
+        if (!f.exists()) return null
+        return try {
+            val text = f.readText()
+            if (text.isBlank()) null else JSONObject(text)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /** item_key(kind, target) == "kind:target.trim().lowercase()". */
     fun itemKey(kind: String, target: String): String =
         "$kind:${target.trim().lowercase()}"

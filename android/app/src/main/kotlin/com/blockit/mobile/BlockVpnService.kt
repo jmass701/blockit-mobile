@@ -339,6 +339,18 @@ class BlockVpnService : VpnService() {
         super.onDestroy()
     }
 
+    /**
+     * Called by the OS when the user revokes VPN permission from Settings
+     * (Settings > VPN > disconnect/forget), or another app's VPN takes over.
+     * This is the authoritative signal that site blocking just went dark —
+     * fire the alert right here rather than trying to detect it indirectly.
+     */
+    override fun onRevoke() {
+        TamperAlertMailer.sendAlert(this, "vpn_revoked")
+        EngineEvents.emit("vpn_stopped")
+        super.onRevoke()
+    }
+
     companion object {
         private const val CHANNEL_ID = "blockit_vpn"
         private const val NOTIFICATION_ID = 1002

@@ -24,11 +24,43 @@ class BlockAccessibilityService : AccessibilityService() {
     private var lastBlockedPackage: String? = null
     private var lastBlockedAt: Long = 0L
 
+    // Package names Android's uninstall confirmation dialog / app-info screen
+    // can appear under, across AOSP and the common OEM skins.
+    private val installerPackages = setOf(
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.settings",
+        "com.samsung.android.packageinstaller",
+    )
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val pkg = event.packageName?.toString() ?: return
+
+        // Tamper detection: someone opened the system uninstall-confirmation
+        // dialog (or the app-info page, which is where the Uninstall button
+        // lives) with BlockIT as the subject. This can't reliably distinguish
+        // "just looking" from "about to confirm," so it errs toward alerting
+        // and immediately backing out — same trade-off as blocking a locked
+        // app. It won't catch every path (a determined user could disable
+        // Accessibility first) but that itself fires its own alert below.
+        if (pkg in installerPackages) {
+            val text = event.text?.joinToString(" ") ?: ""
+            val cls = event.className?.toString() ?: ""
+            val mentionsUs = text.contains("BlockIT", ignoreCase = true) ||
+                (cls.contains("InstalledAppDetails", ignoreCase = true) &&
+                    text.contains(appLabel(packageName), ignoreCase = true))
+            if (mentionsUs && (cls.contains("Uninstall", ignoreCase = true) ||
+                    text.contains("uninstall", ignoreCase = true))
+            ) {
+                TamperAlertMailer.sendAlert(this, "uninstall_attempt")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return
+            }
+        }
+
         // Ignore our own UI and the system launcher/home.
         if (pkg == packageName) return
 
@@ -74,5 +106,17 @@ class BlockAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         // No-op — we don't hold any interruptible feedback.
+    }
+
+    /**
+     * Called when the system tears this service down — most relevantly, right
+     * when the user disables BlockIT's Accessibility permission from Settings.
+     * This is the authoritative signal (unlike the uninstall-screen heuristic
+     * above), so it's the primary way "someone turned off app blocking" gets
+     * reported, not just a best-effort guess.
+     */
+    override fun onDestroy() {
+        TamperAlertMailer.sendAlert(this, "accessibility_disabled")
+        super.onDestroy()
     }
 }
