@@ -84,6 +84,12 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                "getDebugLog" -> result.success(DebugLog.read(this))
+                "clearDebugLog" -> {
+                    DebugLog.clear(this)
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
         }

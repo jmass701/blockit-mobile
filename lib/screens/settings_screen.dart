@@ -9,10 +9,13 @@
 ///   * A close (X) affordance (the AppBar back button here).
 library;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/pending_request.dart';
 import '../services/local_api_service.dart';
+import '../services/native_bridge.dart';
 import '../theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -29,6 +32,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _passwordController = TextEditingController();
   final _partnerController = TextEditingController();
   final _smsGatewayController = TextEditingController();
+  late final TapGestureRecognizer _appPasswordsLinkRecognizer =
+      TapGestureRecognizer()..onTap = _openAppPasswordsPage;
 
   bool _gmailOpen = false;
   bool _obscurePassword = true;
@@ -40,6 +45,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _smsGateways = [];
   String? _error;
   bool _loading = true;
+
+  // Debug log — on-device diagnostics for the accessibility/VPN enforcement
+  // services, since their whole point is running without the Flutter engine
+  // being alive, so in-app print()/breakpoints can't see them.
+  bool _debugOpen = false;
+  String _debugLog = '';
 
   @override
   void initState() {
@@ -71,12 +82,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _detailsOf(List<PendingRequest> reqs, RequestType type) =>
       reqs.where((r) => r.type == type).map((r) => r.detail).toList();
 
+  Future<void> _openAppPasswordsPage() async {
+    final uri = Uri.parse('https://myaccount.google.com/apppasswords');
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      _toast(
+          'Could not open the link — visit myaccount.google.com/apppasswords '
+          'in your browser.',
+          error: true);
+    }
+  }
+
+  Future<void> _refreshDebugLog() async {
+    final log = await NativeBridge.instance.getDebugLog();
+    if (mounted) setState(() => _debugLog = log);
+  }
+
+  Future<void> _clearDebugLog() async {
+    await NativeBridge.instance.clearDebugLog();
+    await _refreshDebugLog();
+  }
+
   @override
   void dispose() {
     _gmailController.dispose();
     _passwordController.dispose();
     _partnerController.dispose();
     _smsGatewayController.dispose();
+    _appPasswordsLinkRecognizer.dispose();
     super.dispose();
   }
 
@@ -177,8 +211,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _partnerSection(),
           const Divider(height: 40, color: AppColors.gray200),
           _smsGatewaySection(),
+          const Divider(height: 40, color: AppColors.gray200),
+          _debugLogSection(),
         ],
       ),
+    );
+  }
+
+  Widget _debugLogSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () {
+            setState(() => _debugOpen = !_debugOpen);
+            if (_debugOpen) _refreshDebugLog();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('DEBUG LOG', style: AppTheme.sectionLabel()),
+                ),
+                Icon(_debugOpen ? Icons.expand_less : Icons.expand_more,
+                    size: 20, color: AppColors.gray500),
+              ],
+            ),
+          ),
+        ),
+        if (_debugOpen) ...[
+          const SizedBox(height: 10),
+          const Text(
+            'Raw record of what the app-blocking and site-blocking services '
+            'have actually done on this device — useful for figuring out why '
+            'something did or didn\'t get blocked/alerted. Tap Refresh after '
+            'trying to open a blocked app or toggling Accessibility off.',
+            style: TextStyle(
+                fontSize: 12, color: AppColors.gray500, height: 1.5),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              FilledButton(
+                  onPressed: _refreshDebugLog, child: const Text('Refresh')),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: _clearDebugLog,
+                style: TextButton.styleFrom(foregroundColor: AppColors.red),
+                child: const Text('Clear'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              border: Border.all(color: AppColors.gray200),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child: SelectableText(
+              _debugLog.isEmpty
+                  ? 'Tap Refresh to load the log.'
+                  : _debugLog,
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  color: Color(0xFF374151)),
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Long-press the text above to select all, then copy it to share.',
+            style: TextStyle(fontSize: 11, color: AppColors.gray500),
+          ),
+        ],
+      ],
     );
   }
 
@@ -227,11 +337,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Not your normal Gmail password — generate one at '
-            'myaccount.google.com/apppasswords (needs 2-Step Verification on '
-            'first).',
-            style: TextStyle(fontSize: 12, color: AppColors.gray500),
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 12, color: AppColors.gray500),
+              children: [
+                const TextSpan(
+                    text: 'Not your normal Gmail password — generate one '
+                        'at '),
+                TextSpan(
+                  text: 'myaccount.google.com/apppasswords',
+                  style: const TextStyle(
+                      color: AppColors.teal,
+                      decoration: TextDecoration.underline,
+                      fontWeight: FontWeight.w600),
+                  recognizer: _appPasswordsLinkRecognizer,
+                ),
+                const TextSpan(text: ' (needs 2-Step Verification on first).'),
+              ],
+            ),
           ),
           if (_error != null) ...[
             const SizedBox(height: 8),

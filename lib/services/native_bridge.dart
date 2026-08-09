@@ -95,6 +95,17 @@ class NativeBridge {
   /// after the engine changes locks), so enforcement reacts without waiting.
   Future<void> notifyStateChanged() => _invoke('notifyStateChanged');
 
+  // ---- On-device debug log ---------------------------------------------------
+
+  /// Reads the native DebugLog ring buffer — a plain-text record of what the
+  /// accessibility/VPN services have actually done, written specifically so
+  /// enforcement bugs can be diagnosed on-device without adb or root.
+  Future<String> getDebugLog() async =>
+      (await _channel.invokeMethod<String>('getDebugLog')) ??
+      '(no debug log available)';
+
+  Future<void> clearDebugLog() => _invoke('clearDebugLog');
+
   Future<void> _invoke(String method) async {
     try {
       await _channel.invokeMethod(method);

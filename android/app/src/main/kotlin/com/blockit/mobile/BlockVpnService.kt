@@ -84,11 +84,13 @@ class BlockVpnService : VpnService() {
         }
 
         val descriptor = builder.establish() ?: run {
+            DebugLog.log(this, "VPN", "builder.establish() returned null — VPN failed to start")
             stopVpn()
             return
         }
         tun = descriptor
         running = true
+        DebugLog.log(this, "VPN", "started, lockedDomains=$lockedDomains")
         EngineEvents.emit("vpn_started")
 
         worker = Thread { runLoop(descriptor) }.also { it.start() }
@@ -171,9 +173,11 @@ class BlockVpnService : VpnService() {
             (packet[udpStart + 1].toInt() and 0xFF)
 
         val answer: ByteArray = if (isBlocked(domain)) {
+            DebugLog.log(this, "VPN", "DNS BLOCKED domain=$domain")
             EngineEvents.emit("dns_blocked")
             buildNxDomain(dnsQuery)
         } else {
+            DebugLog.log(this, "VPN", "DNS allowed domain=$domain")
             forwardUpstream(dnsQuery, forwardSocket) ?: return null
         }
 
@@ -346,6 +350,7 @@ class BlockVpnService : VpnService() {
      * fire the alert right here rather than trying to detect it indirectly.
      */
     override fun onRevoke() {
+        DebugLog.log(this, "VPN", "onRevoke — VPN permission revoked, sending tamper alert")
         TamperAlertMailer.sendAlert(this, "vpn_revoked")
         EngineEvents.emit("vpn_stopped")
         super.onRevoke()

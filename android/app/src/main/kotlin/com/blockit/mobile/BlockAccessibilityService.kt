@@ -33,11 +33,24 @@ class BlockAccessibilityService : AccessibilityService() {
         "com.samsung.android.packageinstaller",
     )
 
+    /**
+     * Fires once when Android actually binds this service — i.e. proof the OS
+     * considers it live, distinct from the Settings toggle merely being on.
+     * If DebugLog never shows this line after enabling Accessibility, the
+     * service isn't actually running no matter what Settings displays.
+     */
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        DebugLog.log(this, "A11y", "onServiceConnected — service is bound and live")
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val pkg = event.packageName?.toString() ?: return
+        val locked = JsonState.lockedAppPackages(this)
+        DebugLog.log(this, "A11y", "event pkg=$pkg lockedCount=${locked.size} locked=$locked")
 
         // Tamper detection: someone opened the system uninstall-confirmation
         // dialog (or the app-info page, which is where the Uninstall button
@@ -64,7 +77,6 @@ class BlockAccessibilityService : AccessibilityService() {
         // Ignore our own UI and the system launcher/home.
         if (pkg == packageName) return
 
-        val locked = JsonState.lockedAppPackages(this)
         if (!locked.contains(pkg.lowercase())) {
             // User navigated away from a blocked app — reset the debounce.
             if (pkg != lastBlockedPackage) lastBlockedPackage = null
@@ -76,8 +88,10 @@ class BlockAccessibilityService : AccessibilityService() {
         lastBlockedPackage = pkg
         lastBlockedAt = now
 
+        DebugLog.log(this, "A11y", "BLOCKING pkg=$pkg — performing GLOBAL_ACTION_HOME")
         // Kick the user out immediately.
-        performGlobalAction(GLOBAL_ACTION_HOME)
+        val homeOk = performGlobalAction(GLOBAL_ACTION_HOME)
+        DebugLog.log(this, "A11y", "performGlobalAction(HOME) returned $homeOk")
         EngineEvents.emit("app_blocked")
 
         if (!isRepeat) {
@@ -116,6 +130,7 @@ class BlockAccessibilityService : AccessibilityService() {
      * reported, not just a best-effort guess.
      */
     override fun onDestroy() {
+        DebugLog.log(this, "A11y", "onDestroy — service torn down, sending tamper alert")
         TamperAlertMailer.sendAlert(this, "accessibility_disabled")
         super.onDestroy()
     }
