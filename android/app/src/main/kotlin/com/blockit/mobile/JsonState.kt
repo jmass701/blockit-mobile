@@ -13,9 +13,18 @@ import java.time.format.DateTimeFormatter
  * being alive, so they read these files directly rather than round-tripping
  * over a MethodChannel.
  *
- * The directory here — context.getDir("app_flutter", MODE_PRIVATE) — is exactly
- * what path_provider's getApplicationDocumentsDirectory() returns on Android, so
- * both sides resolve the identical files.
+ * The directory here — context.getDir("flutter", MODE_PRIVATE) — is exactly
+ * what path_provider's getApplicationDocumentsDirectory() returns on Android
+ * (Flutter engine's PathUtils.getDataDirectory() calls getDir("flutter", ...)
+ * internally), so both sides resolve the identical files.
+ *
+ * IMPORTANT: Android's Context.getDir(name, mode) auto-prefixes the folder it
+ * creates with "app_" — getDir("flutter", ...) is what actually produces the
+ * on-disk folder named "app_flutter". Passing "app_flutter" as the name (as
+ * this used to) makes Android create/read "app_app_flutter" instead — a
+ * silently different, permanently-empty directory. That mismatch was the
+ * root cause of app/site blocking (and tamper alerts) never firing: this
+ * native side was reading a directory Dart never wrote to.
  *
  * Ports blocker_common.item_key() and is_item_unlocked() so the lock decision
  * matches the Dart/Python logic byte-for-byte.
@@ -23,7 +32,7 @@ import java.time.format.DateTimeFormatter
 object JsonState {
 
     private fun dataDir(context: Context): File =
-        context.getDir("app_flutter", Context.MODE_PRIVATE)
+        context.getDir("flutter", Context.MODE_PRIVATE)
 
     private fun readJson(context: Context, name: String): JSONObject {
         val f = File(dataDir(context), name)

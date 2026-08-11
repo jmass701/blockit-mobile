@@ -1,0 +1,60 @@
+From c68683f3abc5925f39badd3b9b07aaccd328bbda Mon Sep 17 00:00:00 2001
+From: Jared Massie <you@example.com>
+Date: Tue, 11 Aug 2026 02:41:50 +0000
+Subject: [PATCH] Fix the actual blocking bug: wrong getDir() name creates a
+ different folder
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+context.getDir(name, mode) auto-prefixes the folder it creates with "app_" —
+so getDir("app_flutter", ...) was reading/writing "app_app_flutter", NOT
+the "app_flutter" folder Dart's path_provider actually writes to (which
+comes from Flutter engine's PathUtils.getDataDirectory() calling
+getDir("flutter", ...) internally). The native accessibility/VPN services
+have been reading an empty, permanently-out-of-sync directory this whole
+time — confirmed directly from the new debug log, which showed
+lockedCount=0 on every single event despite items being on the blocklist
+in the app UI. Fixed by passing "flutter" instead of "app_flutter".
+---
+ .../main/kotlin/com/blockit/mobile/JsonState.kt | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/android/app/src/main/kotlin/com/blockit/mobile/JsonState.kt b/android/app/src/main/kotlin/com/blockit/mobile/JsonState.kt
+index b4bab7a..6de7753 100644
+--- a/android/app/src/main/kotlin/com/blockit/mobile/JsonState.kt
++++ b/android/app/src/main/kotlin/com/blockit/mobile/JsonState.kt
+@@ -13,9 +13,18 @@ import java.time.format.DateTimeFormatter
+  * being alive, so they read these files directly rather than round-tripping
+  * over a MethodChannel.
+  *
+- * The directory here — context.getDir("app_flutter", MODE_PRIVATE) — is exactly
+- * what path_provider's getApplicationDocumentsDirectory() returns on Android, so
+- * both sides resolve the identical files.
++ * The directory here — context.getDir("flutter", MODE_PRIVATE) — is exactly
++ * what path_provider's getApplicationDocumentsDirectory() returns on Android
++ * (Flutter engine's PathUtils.getDataDirectory() calls getDir("flutter", ...)
++ * internally), so both sides resolve the identical files.
++ *
++ * IMPORTANT: Android's Context.getDir(name, mode) auto-prefixes the folder it
++ * creates with "app_" — getDir("flutter", ...) is what actually produces the
++ * on-disk folder named "app_flutter". Passing "app_flutter" as the name (as
++ * this used to) makes Android create/read "app_app_flutter" instead — a
++ * silently different, permanently-empty directory. That mismatch was the
++ * root cause of app/site blocking (and tamper alerts) never firing: this
++ * native side was reading a directory Dart never wrote to.
+  *
+  * Ports blocker_common.item_key() and is_item_unlocked() so the lock decision
+  * matches the Dart/Python logic byte-for-byte.
+@@ -23,7 +32,7 @@ import java.time.format.DateTimeFormatter
+ object JsonState {
+ 
+     private fun dataDir(context: Context): File =
+-        context.getDir("app_flutter", Context.MODE_PRIVATE)
++        context.getDir("flutter", Context.MODE_PRIVATE)
+ 
+     private fun readJson(context: Context, name: String): JSONObject {
+         val f = File(dataDir(context), name)
+-- 
+2.43.0
+
