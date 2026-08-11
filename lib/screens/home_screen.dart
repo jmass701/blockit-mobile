@@ -117,19 +117,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _addApp() async {
-    final picked = await Navigator.of(context).push<InstalledApp>(
-      MaterialPageRoute(builder: (_) => const AppPickerScreen()),
+    final blockedPackages = (_snapshot?.items ?? const <ItemStatus>[])
+        .where((s) => s.item.kind == ItemKind.app)
+        .map((s) => s.item.target)
+        .toSet();
+    final picked = await Navigator.of(context).push<List<InstalledApp>>(
+      MaterialPageRoute(
+        builder: (_) => AppPickerScreen(blockedPackages: blockedPackages),
+      ),
     );
-    if (picked == null) return;
-    final item = BlockedItem(
-      kind: ItemKind.app,
-      target: picked.packageName,
-      name: picked.label,
-    );
-    final res = await _api.requestChange(isAdd: true, item: item);
-    _confirm(res.added
-        ? 'Added "${picked.label}"'
-        : '"${picked.label}" is already blocked');
+    if (picked == null || picked.isEmpty) return;
+    var addedCount = 0;
+    for (final app in picked) {
+      final item = BlockedItem(
+        kind: ItemKind.app,
+        target: app.packageName,
+        name: app.label,
+      );
+      final res = await _api.requestChange(isAdd: true, item: item);
+      if (res.added) addedCount++;
+    }
+    _confirm(picked.length == 1
+        ? (addedCount > 0
+            ? 'Added "${picked.first.label}"'
+            : '"${picked.first.label}" is already blocked')
+        : 'Added $addedCount app${addedCount == 1 ? '' : 's'}');
     _refresh();
   }
 

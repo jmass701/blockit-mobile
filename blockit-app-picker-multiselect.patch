@@ -1,0 +1,214 @@
+From 8c1e53f91209dcf140899b33a55c97836078bf48 Mon Sep 17 00:00:00 2001
+From: Jared Massie <you@example.com>
+Date: Tue, 11 Aug 2026 18:08:34 +0000
+Subject: [PATCH] Support multi-select and already-blocked indication in app
+ picker
+
+The app picker now shows a 'Blocked' badge on apps already on the
+blocklist (and disables re-selecting them), and lets you check off
+multiple apps before tapping Add, instead of adding one app per visit.
+---
+ lib/screens/app_picker_screen.dart | 95 +++++++++++++++++++++++++++---
+ lib/screens/home_screen.dart       | 36 +++++++----
+ 2 files changed, 112 insertions(+), 19 deletions(-)
+
+diff --git a/lib/screens/app_picker_screen.dart b/lib/screens/app_picker_screen.dart
+index 8d7609c..b1e8bc5 100644
+--- a/lib/screens/app_picker_screen.dart
++++ b/lib/screens/app_picker_screen.dart
+@@ -1,7 +1,11 @@
+ /// AppPickerScreen — lists installed launchable apps (via the native
+-/// PackageManager query on the MethodChannel) so the user can pick one to block.
+-/// Returns the chosen InstalledApp to HomeScreen. Adding tightens restrictions,
+-/// so the actual add happens immediately with no approval.
++/// PackageManager query on the MethodChannel) so the user can pick one or
++/// more to block. Already-blocked apps are shown with a "Blocked" badge
++/// (and can't be re-selected). Tapping a row toggles its checkbox; nothing
++/// is added until "Add" is pressed, so multiple apps can be queued up in one
++/// visit instead of re-opening this screen per app. Returns the list of
++/// chosen InstalledApps to HomeScreen. Adding tightens restrictions, so the
++/// actual add happens immediately with no approval.
+ library;
+ 
+ import 'package:flutter/material.dart';
+@@ -10,7 +14,11 @@ import '../services/native_bridge.dart';
+ import '../theme/app_theme.dart';
+ 
+ class AppPickerScreen extends StatefulWidget {
+-  const AppPickerScreen({super.key});
++  /// Package names already on the blocklist, so this screen can show them as
++  /// already-selected instead of letting the user pick them again.
++  final Set<String> blockedPackages;
++
++  const AppPickerScreen({super.key, this.blockedPackages = const {}});
+ 
+   @override
+   State<AppPickerScreen> createState() => _AppPickerScreenState();
+@@ -19,6 +27,7 @@ class AppPickerScreen extends StatefulWidget {
+ class _AppPickerScreenState extends State<AppPickerScreen> {
+   List<InstalledApp>? _apps;
+   String _query = '';
++  final Set<String> _selected = {};
+ 
+   @override
+   void initState() {
+@@ -31,6 +40,24 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
+     if (mounted) setState(() => _apps = apps);
+   }
+ 
++  void _toggle(InstalledApp app) {
++    if (widget.blockedPackages.contains(app.packageName)) return;
++    setState(() {
++      if (_selected.contains(app.packageName)) {
++        _selected.remove(app.packageName);
++      } else {
++        _selected.add(app.packageName);
++      }
++    });
++  }
++
++  void _submit() {
++    final apps = _apps ?? const <InstalledApp>[];
++    final chosen =
++        apps.where((a) => _selected.contains(a.packageName)).toList();
++    Navigator.of(context).pop(chosen);
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     final apps = _apps;
+@@ -43,7 +70,20 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
+             .toList();
+ 
+     return Scaffold(
+-      appBar: AppBar(title: const Text('Pick an app to block')),
++      appBar: AppBar(
++        title: Text(_selected.isEmpty
++            ? 'Pick apps to block'
++            : '${_selected.length} selected'),
++        actions: [
++          if (_selected.isNotEmpty)
++            TextButton(
++              onPressed: _submit,
++              child: Text('Add (${_selected.length})',
++                  style: const TextStyle(
++                      color: AppColors.teal, fontWeight: FontWeight.w700)),
++            ),
++        ],
++      ),
+       body: Column(
+         children: [
+           Padding(
+@@ -67,14 +107,27 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
+                     const Divider(height: 1, color: AppColors.gray200),
+                 itemBuilder: (_, i) {
+                   final app = filtered[i];
++                  final alreadyBlocked =
++                      widget.blockedPackages.contains(app.packageName);
++                  final isSelected = _selected.contains(app.packageName);
+                   return ListTile(
+                     title: Text(app.label,
+                         style: const TextStyle(fontWeight: FontWeight.w600)),
+                     subtitle: Text(app.packageName,
+                         style: const TextStyle(
+                             fontSize: 12, color: AppColors.gray500)),
+-                    trailing: const Icon(Icons.add, color: AppColors.teal),
+-                    onTap: () => Navigator.of(context).pop(app),
++                    tileColor: isSelected
++                        ? AppColors.teal.withOpacity(0.08)
++                        : null,
++                    enabled: !alreadyBlocked,
++                    trailing: alreadyBlocked
++                        ? const _BlockedBadge()
++                        : Checkbox(
++                            value: isSelected,
++                            activeColor: AppColors.teal,
++                            onChanged: (_) => _toggle(app),
++                          ),
++                    onTap: alreadyBlocked ? null : () => _toggle(app),
+                   );
+                 },
+               ),
+@@ -84,3 +137,31 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
+     );
+   }
+ }
++
++class _BlockedBadge extends StatelessWidget {
++  const _BlockedBadge();
++
++  @override
++  Widget build(BuildContext context) {
++    return Container(
++      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
++      decoration: BoxDecoration(
++        color: const Color(0xFFF9FAFB),
++        border: Border.all(color: AppColors.gray200),
++        borderRadius: BorderRadius.circular(AppRadius.sm),
++      ),
++      child: const Row(
++        mainAxisSize: MainAxisSize.min,
++        children: [
++          Icon(Icons.check_circle, size: 14, color: AppColors.gray500),
++          SizedBox(width: 4),
++          Text('Blocked',
++              style: TextStyle(
++                  fontSize: 11,
++                  fontWeight: FontWeight.w700,
++                  color: AppColors.gray500)),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/lib/screens/home_screen.dart b/lib/screens/home_screen.dart
+index cc10419..2cdf595 100644
+--- a/lib/screens/home_screen.dart
++++ b/lib/screens/home_screen.dart
+@@ -117,19 +117,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   }
+ 
+   Future<void> _addApp() async {
+-    final picked = await Navigator.of(context).push<InstalledApp>(
+-      MaterialPageRoute(builder: (_) => const AppPickerScreen()),
+-    );
+-    if (picked == null) return;
+-    final item = BlockedItem(
+-      kind: ItemKind.app,
+-      target: picked.packageName,
+-      name: picked.label,
++    final blockedPackages = (_snapshot?.items ?? const <ItemStatus>[])
++        .where((s) => s.item.kind == ItemKind.app)
++        .map((s) => s.item.target)
++        .toSet();
++    final picked = await Navigator.of(context).push<List<InstalledApp>>(
++      MaterialPageRoute(
++        builder: (_) => AppPickerScreen(blockedPackages: blockedPackages),
++      ),
+     );
+-    final res = await _api.requestChange(isAdd: true, item: item);
+-    _confirm(res.added
+-        ? 'Added "${picked.label}"'
+-        : '"${picked.label}" is already blocked');
++    if (picked == null || picked.isEmpty) return;
++    var addedCount = 0;
++    for (final app in picked) {
++      final item = BlockedItem(
++        kind: ItemKind.app,
++        target: app.packageName,
++        name: app.label,
++      );
++      final res = await _api.requestChange(isAdd: true, item: item);
++      if (res.added) addedCount++;
++    }
++    _confirm(picked.length == 1
++        ? (addedCount > 0
++            ? 'Added "${picked.first.label}"'
++            : '"${picked.first.label}" is already blocked')
++        : 'Added $addedCount app${addedCount == 1 ? '' : 's'}');
+     _refresh();
+   }
+ 
+-- 
+2.43.0
+
