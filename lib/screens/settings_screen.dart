@@ -43,6 +43,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _pendingAdds = [];
   List<String> _pendingInvites = [];
   List<String> _smsGateways = [];
+  bool _contentFilterEnabled = false;
+  bool _contentFilterDisablePending = false;
   String? _error;
   bool _loading = true;
 
@@ -72,6 +74,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _pendingAdds = _detailsOf(pending, RequestType.partnerAdd);
       _pendingInvites = _detailsOf(pending, RequestType.partnerInvite);
       _smsGateways = cfg.tamperAlertSmsGateways;
+      _contentFilterEnabled = cfg.adultContentFilterEnabled;
+      _contentFilterDisablePending = pending
+          .any((r) => r.type == RequestType.contentFilterDisable);
       // Auto-expand the Gmail section when it isn't configured yet.
       _gmailOpen =
           cfg.gmailAddress.isEmpty || cfg.gmailAppPassword.isEmpty;
@@ -185,6 +190,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _load();
   }
 
+  Future<void> _toggleContentFilter(bool value) async {
+    final res = value
+        ? await _api.contentFilterEnable()
+        : await _api.contentFilterDisable();
+    if (res.ok && res.immediate) {
+      _toast(value ? 'Strict content filter turned on' : 'Turned off');
+    } else if (res.ok && res.requestId != null) {
+      _toast('Request #${res.requestId} sent — turning it off needs '
+          "the first partner's approval");
+    } else {
+      _toast(res.error ?? 'Could not update the content filter', error: true);
+    }
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -211,6 +231,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _partnerSection(),
           const Divider(height: 40, color: AppColors.gray200),
           _smsGatewaySection(),
+          const Divider(height: 40, color: AppColors.gray200),
+          _contentFilterSection(),
           const Divider(height: 40, color: AppColors.gray200),
           _debugLogSection(),
         ],
@@ -501,6 +523,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
           "Regular unlock/blocklist approval emails are NOT duplicated "
           "here, only tamper alerts. Not all carriers support this (AT&T "
           "notably doesn't).",
+          style: TextStyle(
+              fontSize: 12, color: AppColors.gray500, height: 1.5),
+        ),
+      ],
+    );
+  }
+
+  Widget _contentFilterSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text('STRICT CONTENT FILTER', style: AppTheme.sectionLabel()),
+            ),
+            if (_contentFilterDisablePending)
+              _pendingLabel('Turn-off pending')
+            else
+              Switch(
+                value: _contentFilterEnabled,
+                onChanged: _toggleContentFilter,
+                activeColor: AppColors.teal,
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'When on, all web browsing is routed through a content-filtering '
+          'DNS resolver that automatically blocks pornography and other '
+          'adult sites — no need to add them to the blocklist yourself. '
+          'Turning it on applies immediately; turning it off needs your '
+          "first approval partner's OK, same as removing a blocked site.",
           style: TextStyle(
               fontSize: 12, color: AppColors.gray500, height: 1.5),
         ),

@@ -223,6 +223,11 @@ class BlockEngineService {
           cfg.approverEmails.remove(email);
           configChanged = true;
           break;
+
+        case RequestType.contentFilterDisable:
+          cfg.adultContentFilterEnabled = false;
+          configChanged = true;
+          break;
       }
     }
 

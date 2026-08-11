@@ -62,6 +62,14 @@ object JsonState {
         }
     }
 
+    /**
+     * True if the "strict" adult-content DNS filter is turned on in
+     * config.json. Read fresh each time (like everything else here) so
+     * BlockVpnService picks up an enable/disable within one refresh cycle.
+     */
+    fun adultContentFilterEnabled(context: Context): Boolean =
+        readConfigJson(context)?.optBoolean("adult_content_filter_enabled", false) ?: false
+
     /** item_key(kind, target) == "kind:target.trim().lowercase()". */
     fun itemKey(kind: String, target: String): String =
         "$kind:${target.trim().lowercase()}"

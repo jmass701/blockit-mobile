@@ -326,4 +326,62 @@ class LocalApiService {
     await _storage.saveConfig(cfg);
     return const ApiResult(ok: true, immediate: true);
   }
+
+  /// Turns ON the strict adult-content filter. Tightening a restriction, so
+  /// it applies immediately — no approval needed. The native VPN service
+  /// picks up the change on its next ~3s refresh (see BlockVpnService.kt).
+  Future<ApiResult> contentFilterEnable() async {
+    final cfg = await _storage.loadConfig();
+    if (cfg.adultContentFilterEnabled) {
+      return const ApiResult(ok: true, immediate: true, added: false);
+    }
+    cfg.adultContentFilterEnabled = true;
+    await _storage.saveConfig(cfg);
+    await NativeBridge.instance.notifyStateChanged();
+    return const ApiResult(ok: true, immediate: true, added: true);
+  }
+
+  /// Turns OFF the strict adult-content filter. Loosening a restriction, so
+  /// (like partnersRemove) it goes through the first approval partner —
+  /// unless there are no partners configured yet, in which case there's no
+  /// one to gate it, so it applies immediately.
+  Future<ApiResult> contentFilterDisable() async {
+    final cfg = await _storage.loadConfig();
+    if (!cfg.adultContentFilterEnabled) {
+      return ApiResult.error('The content filter is already off.');
+    }
+    if (cfg.approverEmails.isEmpty) {
+      cfg.adultContentFilterEnabled = false;
+      await _storage.saveConfig(cfg);
+      await NativeBridge.instance.notifyStateChanged();
+      return const ApiResult(ok: true, immediate: true);
+    }
+    if (!cfg.isValid) {
+      return ApiResult.error(
+          'Finish setting up the Gmail account below before requesting changes.');
+    }
+    final state = await _storage.loadState();
+    final requests = await _storage.loadPendingRequests();
+    final reqId = state.takeNextId();
+    try {
+      final sent = await _email.sendApprovalEmail(
+        cfg,
+        reqId,
+        'Request to turn OFF the strict adult-content filter. Approve to '
+        'confirm, or deny to leave it on.',
+        recipients: [cfg.approverEmails.first],
+      );
+      requests.add(PendingRequest(
+        id: reqId,
+        type: RequestType.contentFilterDisable,
+        detail: 'adult_content_filter',
+        sentAt: DateTime.now(),
+        messageId: sent.messageId,
+      ));
+      await _storage.saveState(state, requests);
+      return ApiResult(ok: true, requestId: reqId);
+    } catch (e) {
+      return ApiResult.error("Couldn't send the request email: $e");
+    }
+  }
 }

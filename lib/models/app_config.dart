@@ -27,6 +27,15 @@ class AppConfig {
   /// convenience so the approver gets a text, not just an email.
   List<String> tamperAlertSmsGateways;
 
+  /// "Strict" adult-content filter — when true, the on-device DNS filter
+  /// (BlockVpnService.kt) forwards allowed queries to a content-filtering
+  /// resolver (CleanBrowsing Family Filter) instead of a plain resolver,
+  /// automatically blocking porn/adult sites without maintaining a manual
+  /// domain list. Follows the same "tighten = immediate, loosen = needs
+  /// partner approval" rule as the rest of the app: turning it ON applies
+  /// right away, turning it OFF goes through the approval-request flow.
+  bool adultContentFilterEnabled;
+
   /// Fixed at 10s, mirroring CONFIG_DEFAULTS["check_interval_seconds"] — the
   /// engine re-checks locks and polls IMAP on this cadence. Not user-editable.
   final int checkIntervalSeconds;
@@ -45,6 +54,7 @@ class AppConfig {
     this.gmailAppPassword = '',
     List<String>? approverEmails,
     List<String>? tamperAlertSmsGateways,
+    this.adultContentFilterEnabled = false,
     this.checkIntervalSeconds = 10,
     this.unlockDurationDefault = 30,
     this.cooldownBetweenUnlockRequestsMinutes = 10,
@@ -75,6 +85,8 @@ class AppConfig {
       gmailAppPassword: (json['gmail_app_password'] ?? '').toString(),
       approverEmails: approvers,
       tamperAlertSmsGateways: smsGateways,
+      adultContentFilterEnabled:
+          (json['adult_content_filter_enabled'] as bool?) ?? false,
       // check_interval_seconds and cooldown are FORCED to their defaults on
       // every load in the Windows app (see _FORCED_KEYS) — do the same here so
       // a stale saved value can't override them.
@@ -89,6 +101,7 @@ class AppConfig {
         'gmail_app_password': gmailAppPassword,
         'approver_emails': approverEmails,
         'tamper_alert_sms_gateways': tamperAlertSmsGateways,
+        'adult_content_filter_enabled': adultContentFilterEnabled,
         'unlock_duration_minutes': unlockDurationDefault,
         'check_interval_seconds': checkIntervalSeconds,
         'cooldown_between_unlock_requests_minutes':
@@ -113,6 +126,7 @@ class AppConfig {
     String? gmailAppPassword,
     List<String>? approverEmails,
     List<String>? tamperAlertSmsGateways,
+    bool? adultContentFilterEnabled,
   }) =>
       AppConfig(
         gmailAddress: gmailAddress ?? this.gmailAddress,
@@ -120,6 +134,8 @@ class AppConfig {
         approverEmails: approverEmails ?? List<String>.from(this.approverEmails),
         tamperAlertSmsGateways: tamperAlertSmsGateways ??
             List<String>.from(this.tamperAlertSmsGateways),
+        adultContentFilterEnabled:
+            adultContentFilterEnabled ?? this.adultContentFilterEnabled,
         checkIntervalSeconds: checkIntervalSeconds,
         unlockDurationDefault: unlockDurationDefault,
         cooldownBetweenUnlockRequestsMinutes:

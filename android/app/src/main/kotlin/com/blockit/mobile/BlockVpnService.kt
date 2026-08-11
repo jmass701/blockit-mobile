@@ -22,9 +22,12 @@ import java.nio.ByteBuffer
  * Windows app redirects blocked domains to 127.0.0.1 in the hosts file, here we
  * run a tiny VpnService that intercepts DNS queries and answers NXDOMAIN for any
  * currently-LOCKED domain (and its subdomains / www. variant), while forwarding
- * every other query to a real upstream resolver (8.8.8.8). No traffic is
- * proxied through any remote server — this is purely on-device DNS interception,
- * the same pattern used by DNS66 / Blokada.
+ * every other query to an upstream resolver — normally 8.8.8.8, or the
+ * CleanBrowsing Family Filter resolver when the "strict" adult-content filter
+ * is turned on in Settings, which blocks porn/adult sites at the DNS level
+ * without needing a manual domain list. No traffic is proxied through any
+ * remote server — this is purely on-device DNS interception, the same pattern
+ * used by DNS66 / Blokada.
  *
  * The locked-domain set is read straight from blocklist.json / state.json via
  * JsonState each cycle, so unlocking a site (which mutates state.json) stops it
@@ -45,9 +48,25 @@ class BlockVpnService : VpnService() {
     // packets reach us; all other traffic uses the normal network untouched.
     private val tunAddress = "10.111.222.1"
     private val dnsSentinel = "10.111.222.2"
-    private val upstreamDns = "8.8.8.8"
+
+    // Normal upstream resolver vs. a content-filtering resolver (CleanBrowsing
+    // Family Filter — blocks porn/adult sites and enforces safe search at the
+    // DNS level, no manual domain list needed). Which one we forward allowed
+    // queries to is controlled by config.json's "strict" adult-content-filter
+    // toggle, re-read on the same cadence as lockedDomains.
+    private val normalUpstreamDns = "8.8.8.8"
+    private val filteredUpstreamDns = "185.228.168.168"
+    @Volatile private var upstreamDns = normalUpstreamDns
 
     @Volatile private var lockedDomains: Set<String> = emptySet()
+
+    private fun refreshUpstreamDns() {
+        upstreamDns = if (JsonState.adultContentFilterEnabled(this)) {
+            filteredUpstreamDns
+        } else {
+            normalUpstreamDns
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -57,6 +76,7 @@ class BlockVpnService : VpnService() {
             }
             ACTION_REFRESH -> {
                 lockedDomains = JsonState.lockedDomains(this)
+                refreshUpstreamDns()
                 return START_STICKY
             }
         }
@@ -67,6 +87,7 @@ class BlockVpnService : VpnService() {
     private fun startVpn() {
         startAsForeground()
         lockedDomains = JsonState.lockedDomains(this)
+        refreshUpstreamDns()
 
         val builder = Builder()
             .setSession("BlockIT DNS filter")
@@ -116,6 +137,7 @@ class BlockVpnService : VpnService() {
                 val now = System.currentTimeMillis()
                 if (now - lastDomainRefresh > 3000) {
                     lockedDomains = JsonState.lockedDomains(this)
+                    refreshUpstreamDns()
                     lastDomainRefresh = now
                 }
 

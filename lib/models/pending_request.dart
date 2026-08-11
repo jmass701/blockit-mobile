@@ -20,6 +20,12 @@ enum RequestType {
   partnerAdd,
   partnerInvite,
   partnerRemove,
+
+  /// Turning OFF the strict adult-content filter — a loosening change, so it
+  /// goes through the same first-partner-approval flow as partnerRemove.
+  /// (Turning it ON is a tightening change and applies immediately, with no
+  /// request created.)
+  contentFilterDisable,
 }
 
 const Map<RequestType, String> _typeWire = {
@@ -31,6 +37,7 @@ const Map<RequestType, String> _typeWire = {
   RequestType.partnerAdd: 'partner_add',
   RequestType.partnerInvite: 'partner_invite',
   RequestType.partnerRemove: 'partner_remove',
+  RequestType.contentFilterDisable: 'content_filter_disable',
 };
 
 RequestType requestTypeFromWire(String s) => _typeWire.entries
@@ -48,6 +55,7 @@ const Map<RequestType, String> requestTypeLabels = {
   RequestType.partnerAdd: 'Add partner',
   RequestType.partnerInvite: 'Partner invite',
   RequestType.partnerRemove: 'Remove partner',
+  RequestType.contentFilterDisable: 'Disable strict content filter',
 };
 
 enum RequestStatus { pending, approved, denied }
