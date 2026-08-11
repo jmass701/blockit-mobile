@@ -23,6 +23,23 @@ if (flutterVersionName == null) {
     flutterVersionName = "1.0"
 }
 
+// A STABLE release-signing key, committed alongside the app, so every build —
+// whether from GitHub Actions or a local machine — produces an APK signed the
+// same way. Without this, each CI run got its own throw-away debug keystore
+// (Gradle auto-generates one when none exists), so every new build's
+// signature differed from whatever was already installed and Android refused
+// to install over it ("package conflicts with an existing package"). This
+// keystore is deliberately checked into the repo rather than kept as a CI
+// secret, since the whole point of this project's GitHub Actions workflow is
+// to build without any secret-management step.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withReader("UTF-8") { reader ->
+        keystoreProperties.load(reader)
+    }
+}
+
 android {
     namespace = "com.blockit.mobile"
     compileSdk = 36
@@ -58,11 +75,25 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"]
+                keyPassword = keystoreProperties["keyPassword"]
+                storeFile = file(keystoreProperties["storeFile"])
+                storePassword = keystoreProperties["storePassword"]
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Debug signing so `flutter run --release` works out of the box;
-            // replace with a real keystore before shipping.
-            signingConfig = signingConfigs.debug
+            // Stable signing key (see key.properties/blockit-release.keystore)
+            // so updates install in place instead of colliding with whatever
+            // signature the previous CI-built APK happened to get.
+            signingConfig = keystorePropertiesFile.exists()
+                ? signingConfigs.release
+                : signingConfigs.debug
         }
     }
 }
