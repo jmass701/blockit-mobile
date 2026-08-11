@@ -106,6 +106,26 @@ class NativeBridge {
 
   Future<void> clearDebugLog() => _invoke('clearDebugLog');
 
+  // ---- Tamper alerts ----------------------------------------------------
+
+  /// Fires a tamper alert email/text immediately from Dart, over the same
+  /// TamperAlertMailer path the native services use for uninstall/
+  /// accessibility/VPN tampering. Used by the in-person PIN unlock flow,
+  /// which bypasses the usual email-approval pipeline and must always
+  /// notify the approval partner as a safety net — so this call is never
+  /// optional/best-effort from the caller's point of view, even though
+  /// (like every native call here) it fails soft if the channel errors.
+  Future<void> sendTamperAlert(String reason, {String? detail}) async {
+    try {
+      await _channel.invokeMethod('sendTamperAlert', {
+        'reason': reason,
+        if (detail != null) 'detail': detail,
+      });
+    } on PlatformException {
+      // Swallow — same as other native calls.
+    }
+  }
+
   Future<void> _invoke(String method) async {
     try {
       await _channel.invokeMethod(method);

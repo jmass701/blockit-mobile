@@ -36,6 +36,20 @@ class AppConfig {
   /// right away, turning it OFF goes through the approval-request flow.
   bool adultContentFilterEnabled;
 
+  /// Salted SHA-256 hash of the "in-person PIN" (see PinService) — a quick
+  /// numeric PIN that unlocks an item immediately on-device, bypassing the
+  /// email-approval flow, for when the approval partner is physically
+  /// present. Empty means no PIN has been set up. The raw PIN is never
+  /// stored — only this hash and its salt.
+  String inPersonPinHash;
+
+  /// Random salt paired with [inPersonPinHash]; regenerated every time the
+  /// PIN is (re)set.
+  String inPersonPinSalt;
+
+  /// True once a PIN has actually been configured.
+  bool get hasInPersonPin => inPersonPinHash.isNotEmpty;
+
   /// Fixed at 10s, mirroring CONFIG_DEFAULTS["check_interval_seconds"] — the
   /// engine re-checks locks and polls IMAP on this cadence. Not user-editable.
   final int checkIntervalSeconds;
@@ -55,6 +69,8 @@ class AppConfig {
     List<String>? approverEmails,
     List<String>? tamperAlertSmsGateways,
     this.adultContentFilterEnabled = false,
+    this.inPersonPinHash = '',
+    this.inPersonPinSalt = '',
     this.checkIntervalSeconds = 10,
     this.unlockDurationDefault = 30,
     this.cooldownBetweenUnlockRequestsMinutes = 10,
@@ -87,6 +103,8 @@ class AppConfig {
       tamperAlertSmsGateways: smsGateways,
       adultContentFilterEnabled:
           (json['adult_content_filter_enabled'] as bool?) ?? false,
+      inPersonPinHash: (json['in_person_pin_hash'] ?? '').toString(),
+      inPersonPinSalt: (json['in_person_pin_salt'] ?? '').toString(),
       // check_interval_seconds and cooldown are FORCED to their defaults on
       // every load in the Windows app (see _FORCED_KEYS) — do the same here so
       // a stale saved value can't override them.
@@ -102,6 +120,8 @@ class AppConfig {
         'approver_emails': approverEmails,
         'tamper_alert_sms_gateways': tamperAlertSmsGateways,
         'adult_content_filter_enabled': adultContentFilterEnabled,
+        'in_person_pin_hash': inPersonPinHash,
+        'in_person_pin_salt': inPersonPinSalt,
         'unlock_duration_minutes': unlockDurationDefault,
         'check_interval_seconds': checkIntervalSeconds,
         'cooldown_between_unlock_requests_minutes':
@@ -127,6 +147,8 @@ class AppConfig {
     List<String>? approverEmails,
     List<String>? tamperAlertSmsGateways,
     bool? adultContentFilterEnabled,
+    String? inPersonPinHash,
+    String? inPersonPinSalt,
   }) =>
       AppConfig(
         gmailAddress: gmailAddress ?? this.gmailAddress,
@@ -136,6 +158,8 @@ class AppConfig {
             List<String>.from(this.tamperAlertSmsGateways),
         adultContentFilterEnabled:
             adultContentFilterEnabled ?? this.adultContentFilterEnabled,
+        inPersonPinHash: inPersonPinHash ?? this.inPersonPinHash,
+        inPersonPinSalt: inPersonPinSalt ?? this.inPersonPinSalt,
         checkIntervalSeconds: checkIntervalSeconds,
         unlockDurationDefault: unlockDurationDefault,
         cooldownBetweenUnlockRequestsMinutes:

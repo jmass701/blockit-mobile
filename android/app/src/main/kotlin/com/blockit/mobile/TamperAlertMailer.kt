@@ -55,8 +55,13 @@ object TamperAlertMailer {
      * the specific failure — so a failure is never silent. There's no other
      * place to surface this: the moment this fires is often exactly when the
      * Flutter UI isn't on screen to show an in-app error.
+     *
+     * [extraDetail] is optional free text appended to the email body — used
+     * by the in-person PIN flow (called from Dart via MainActivity's
+     * "sendTamperAlert") to say exactly what got unlocked, since "pin_unlock"
+     * alone doesn't say which item.
      */
-    fun sendAlert(context: Context, reason: String) {
+    fun sendAlert(context: Context, reason: String, extraDetail: String? = null) {
         val now = System.currentTimeMillis()
         val last = lastSentAt[reason] ?: 0L
         if (now - last < COOLDOWN_MS) return
@@ -73,7 +78,7 @@ object TamperAlertMailer {
         }
         Thread {
             try {
-                send(cfg, reason)
+                send(cfg, reason, extraDetail)
                 postResultNotification(appContext, reason, success = true, detail = null)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to send tamper alert for $reason", e)
@@ -131,6 +136,11 @@ object TamperAlertMailer {
             "BlockIT alert: Someone tried to uninstall BlockIT",
             "Someone just opened the \"Uninstall BlockIT\" confirmation screen on this " +
                 "device. BlockIT is still installed for now, but you may want to check in.",
+        )
+        "pin_unlock" -> Pair(
+            "BlockIT alert: In-person PIN used to unlock something",
+            "The in-person PIN was just used on this device to unlock a blocked app or " +
+                "site immediately, without going through the usual email approval.",
         )
         else -> Pair("BlockIT alert", "A tamper attempt ($reason) was detected on this device.")
     }
@@ -192,8 +202,9 @@ object TamperAlertMailer {
         return sb.toString()
     }
 
-    private fun send(cfg: MailConfig, reason: String) {
-        val (subject, body) = subjectAndBodyFor(reason)
+    private fun send(cfg: MailConfig, reason: String, extraDetail: String? = null) {
+        val (subject, baseBody) = subjectAndBodyFor(reason)
+        val body = if (extraDetail.isNullOrBlank()) baseBody else "$baseBody\n\n$extraDetail"
 
         // Connect a plain socket first (with a real, enforceable connect
         // timeout), THEN layer TLS on top of it — createSocket(host, port)

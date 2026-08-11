@@ -90,6 +90,13 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                "sendTamperAlert" -> {
+                    val reason = call.argument<String>("reason") ?: "pin_unlock"
+                    val detail = call.argument<String>("detail")
+                    TamperAlertMailer.sendAlert(this, reason, detail)
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
         }

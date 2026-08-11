@@ -37,6 +37,10 @@ dependencies:
   # Opens links in the device's browser (e.g. the Gmail App Password page).
   url_launcher: ^6.3.1
 
+  # Salted SHA-256 hashing for the in-person PIN — only the hash is ever
+  # persisted to config.json, never the PIN itself.
+  crypto: ^3.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

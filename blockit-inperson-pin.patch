@@ -1,0 +1,824 @@
+From 109702d789c8a6589ad05bf22258335a03ab8e57 Mon Sep 17 00:00:00 2001
+From: Jared Massie <you@example.com>
+Date: Tue, 11 Aug 2026 18:21:47 +0000
+Subject: [PATCH] Add in-person PIN unlock with mandatory tamper alert
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds a numeric PIN (set up in Settings, salted SHA-256 hash only —
+the PIN itself is never stored) that unlocks a blocked app or site
+immediately on-device, for when the approval partner is physically
+present instead of reachable by email. Bypassing the usual approval
+step is the whole point, so using the PIN always fires the same
+tamper-alert email/text used for uninstall attempts and
+accessibility/VPN tampering, so it can never be used quietly.
+---
+ .../kotlin/com/blockit/mobile/MainActivity.kt |   7 +
+ .../com/blockit/mobile/TamperAlertMailer.kt   |  19 +-
+ lib/models/app_config.dart                    |  24 +++
+ lib/screens/home_screen.dart                  |  27 ++-
+ lib/screens/settings_screen.dart              | 116 ++++++++++++
+ lib/services/block_engine_service.dart        |  23 +++
+ lib/services/local_api_service.dart           |  61 +++++++
+ lib/services/native_bridge.dart               |  20 ++
+ lib/services/pin_service.dart                 |  30 +++
+ lib/widgets/item_card.dart                    |  19 ++
+ lib/widgets/pin_unlock_sheet.dart             | 171 ++++++++++++++++++
+ pubspec.yaml                                  |   4 +
+ 12 files changed, 516 insertions(+), 5 deletions(-)
+ create mode 100644 lib/services/pin_service.dart
+ create mode 100644 lib/widgets/pin_unlock_sheet.dart
+
+diff --git a/android/app/src/main/kotlin/com/blockit/mobile/MainActivity.kt b/android/app/src/main/kotlin/com/blockit/mobile/MainActivity.kt
+index bbbd5dd..9af20d7 100644
+--- a/android/app/src/main/kotlin/com/blockit/mobile/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/blockit/mobile/MainActivity.kt
+@@ -90,6 +90,13 @@ class MainActivity : FlutterActivity() {
+                     result.success(null)
+                 }
+ 
++                "sendTamperAlert" -> {
++                    val reason = call.argument<String>("reason") ?: "pin_unlock"
++                    val detail = call.argument<String>("detail")
++                    TamperAlertMailer.sendAlert(this, reason, detail)
++                    result.success(null)
++                }
++
+                 else -> result.notImplemented()
+             }
+         }
+diff --git a/android/app/src/main/kotlin/com/blockit/mobile/TamperAlertMailer.kt b/android/app/src/main/kotlin/com/blockit/mobile/TamperAlertMailer.kt
+index 4320463..ce5cf4f 100644
+--- a/android/app/src/main/kotlin/com/blockit/mobile/TamperAlertMailer.kt
++++ b/android/app/src/main/kotlin/com/blockit/mobile/TamperAlertMailer.kt
+@@ -55,8 +55,13 @@ object TamperAlertMailer {
+      * the specific failure — so a failure is never silent. There's no other
+      * place to surface this: the moment this fires is often exactly when the
+      * Flutter UI isn't on screen to show an in-app error.
++     *
++     * [extraDetail] is optional free text appended to the email body — used
++     * by the in-person PIN flow (called from Dart via MainActivity's
++     * "sendTamperAlert") to say exactly what got unlocked, since "pin_unlock"
++     * alone doesn't say which item.
+      */
+-    fun sendAlert(context: Context, reason: String) {
++    fun sendAlert(context: Context, reason: String, extraDetail: String? = null) {
+         val now = System.currentTimeMillis()
+         val last = lastSentAt[reason] ?: 0L
+         if (now - last < COOLDOWN_MS) return
+@@ -73,7 +78,7 @@ object TamperAlertMailer {
+         }
+         Thread {
+             try {
+-                send(cfg, reason)
++                send(cfg, reason, extraDetail)
+                 postResultNotification(appContext, reason, success = true, detail = null)
+             } catch (e: Exception) {
+                 Log.w(TAG, "Failed to send tamper alert for $reason", e)
+@@ -132,6 +137,11 @@ object TamperAlertMailer {
+             "Someone just opened the \"Uninstall BlockIT\" confirmation screen on this " +
+                 "device. BlockIT is still installed for now, but you may want to check in.",
+         )
++        "pin_unlock" -> Pair(
++            "BlockIT alert: In-person PIN used to unlock something",
++            "The in-person PIN was just used on this device to unlock a blocked app or " +
++                "site immediately, without going through the usual email approval.",
++        )
+         else -> Pair("BlockIT alert", "A tamper attempt ($reason) was detected on this device.")
+     }
+ 
+@@ -192,8 +202,9 @@ object TamperAlertMailer {
+         return sb.toString()
+     }
+ 
+-    private fun send(cfg: MailConfig, reason: String) {
+-        val (subject, body) = subjectAndBodyFor(reason)
++    private fun send(cfg: MailConfig, reason: String, extraDetail: String? = null) {
++        val (subject, baseBody) = subjectAndBodyFor(reason)
++        val body = if (extraDetail.isNullOrBlank()) baseBody else "$baseBody\n\n$extraDetail"
+ 
+         // Connect a plain socket first (with a real, enforceable connect
+         // timeout), THEN layer TLS on top of it — createSocket(host, port)
+diff --git a/lib/models/app_config.dart b/lib/models/app_config.dart
+index f2c293e..a435016 100644
+--- a/lib/models/app_config.dart
++++ b/lib/models/app_config.dart
+@@ -36,6 +36,20 @@ class AppConfig {
+   /// right away, turning it OFF goes through the approval-request flow.
+   bool adultContentFilterEnabled;
+ 
++  /// Salted SHA-256 hash of the "in-person PIN" (see PinService) — a quick
++  /// numeric PIN that unlocks an item immediately on-device, bypassing the
++  /// email-approval flow, for when the approval partner is physically
++  /// present. Empty means no PIN has been set up. The raw PIN is never
++  /// stored — only this hash and its salt.
++  String inPersonPinHash;
++
++  /// Random salt paired with [inPersonPinHash]; regenerated every time the
++  /// PIN is (re)set.
++  String inPersonPinSalt;
++
++  /// True once a PIN has actually been configured.
++  bool get hasInPersonPin => inPersonPinHash.isNotEmpty;
++
+   /// Fixed at 10s, mirroring CONFIG_DEFAULTS["check_interval_seconds"] — the
+   /// engine re-checks locks and polls IMAP on this cadence. Not user-editable.
+   final int checkIntervalSeconds;
+@@ -55,6 +69,8 @@ class AppConfig {
+     List<String>? approverEmails,
+     List<String>? tamperAlertSmsGateways,
+     this.adultContentFilterEnabled = false,
++    this.inPersonPinHash = '',
++    this.inPersonPinSalt = '',
+     this.checkIntervalSeconds = 10,
+     this.unlockDurationDefault = 30,
+     this.cooldownBetweenUnlockRequestsMinutes = 10,
+@@ -87,6 +103,8 @@ class AppConfig {
+       tamperAlertSmsGateways: smsGateways,
+       adultContentFilterEnabled:
+           (json['adult_content_filter_enabled'] as bool?) ?? false,
++      inPersonPinHash: (json['in_person_pin_hash'] ?? '').toString(),
++      inPersonPinSalt: (json['in_person_pin_salt'] ?? '').toString(),
+       // check_interval_seconds and cooldown are FORCED to their defaults on
+       // every load in the Windows app (see _FORCED_KEYS) — do the same here so
+       // a stale saved value can't override them.
+@@ -102,6 +120,8 @@ class AppConfig {
+         'approver_emails': approverEmails,
+         'tamper_alert_sms_gateways': tamperAlertSmsGateways,
+         'adult_content_filter_enabled': adultContentFilterEnabled,
++        'in_person_pin_hash': inPersonPinHash,
++        'in_person_pin_salt': inPersonPinSalt,
+         'unlock_duration_minutes': unlockDurationDefault,
+         'check_interval_seconds': checkIntervalSeconds,
+         'cooldown_between_unlock_requests_minutes':
+@@ -127,6 +147,8 @@ class AppConfig {
+     List<String>? approverEmails,
+     List<String>? tamperAlertSmsGateways,
+     bool? adultContentFilterEnabled,
++    String? inPersonPinHash,
++    String? inPersonPinSalt,
+   }) =>
+       AppConfig(
+         gmailAddress: gmailAddress ?? this.gmailAddress,
+@@ -136,6 +158,8 @@ class AppConfig {
+             List<String>.from(this.tamperAlertSmsGateways),
+         adultContentFilterEnabled:
+             adultContentFilterEnabled ?? this.adultContentFilterEnabled,
++        inPersonPinHash: inPersonPinHash ?? this.inPersonPinHash,
++        inPersonPinSalt: inPersonPinSalt ?? this.inPersonPinSalt,
+         checkIntervalSeconds: checkIntervalSeconds,
+         unlockDurationDefault: unlockDurationDefault,
+         cooldownBetweenUnlockRequestsMinutes:
+diff --git a/lib/screens/home_screen.dart b/lib/screens/home_screen.dart
+index 2cdf595..b7ee851 100644
+--- a/lib/screens/home_screen.dart
++++ b/lib/screens/home_screen.dart
+@@ -23,6 +23,7 @@ import '../services/local_api_service.dart';
+ import '../services/native_bridge.dart';
+ import '../theme/app_theme.dart';
+ import '../widgets/item_card.dart';
++import '../widgets/pin_unlock_sheet.dart';
+ import '../widgets/request_card.dart';
+ import '../widgets/section_header.dart';
+ import '../widgets/unlock_duration_sheet.dart';
+@@ -41,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   final TextEditingController _siteController = TextEditingController();
+ 
+   StatusSnapshot? _snapshot;
++  bool _hasPin = false;
+   Timer? _pollTimer;
+   StreamSubscription<String>? _eventSub;
+   StreamSubscription<void>? _engineSub;
+@@ -75,7 +77,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+ 
+   Future<void> _refresh() async {
+     final snap = await _api.status();
+-    if (mounted) setState(() => _snapshot = snap);
++    final cfg = await _api.getSettings();
++    if (mounted) {
++      setState(() {
++        _snapshot = snap;
++        _hasPin = cfg.hasInPersonPin;
++      });
++    }
+   }
+ 
+   void _confirm(String message, {bool error = false}) {
+@@ -100,6 +108,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+     _refresh();
+   }
+ 
++  Future<void> _unlockWithPin(ItemStatus s) async {
++    final result = await PinUnlockSheet.show(context, s.item.name);
++    if (result == null) return;
++    final res = await _api.unlockWithPin(s.item, result.pin,
++        duration: result.duration);
++    if (res.ok) {
++      _confirm(
++          'Unlocked "${s.item.name}" with PIN — your approval partner has '
++          'been alerted.');
++    } else {
++      _confirm(res.error ?? 'Could not unlock with that PIN', error: true);
++    }
++    _refresh();
++  }
++
+   Future<void> _lockNow(ItemStatus s) async {
+     await _api.lockNow(item: s.item);
+     _confirm('Locked "${s.item.name}"');
+@@ -243,6 +266,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+                     onLockNow: () => _lockNow(s),
+                     onRequestRemove: () => _requestRemove(s),
+                     onCountdownExpired: _refresh,
++                    hasPin: _hasPin,
++                    onUnlockWithPin: () => _unlockWithPin(s),
+                   )),
+             const SectionHeader('Add to block list', noApproval: true),
+             _addAppCard(),
+diff --git a/lib/screens/settings_screen.dart b/lib/screens/settings_screen.dart
+index cf638fe..f1eb4bd 100644
+--- a/lib/screens/settings_screen.dart
++++ b/lib/screens/settings_screen.dart
+@@ -32,6 +32,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
+   final _passwordController = TextEditingController();
+   final _partnerController = TextEditingController();
+   final _smsGatewayController = TextEditingController();
++  final _pinController = TextEditingController();
++  final _pinConfirmController = TextEditingController();
+   late final TapGestureRecognizer _appPasswordsLinkRecognizer =
+       TapGestureRecognizer()..onTap = _openAppPasswordsPage;
+ 
+@@ -45,6 +47,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
+   List<String> _smsGateways = [];
+   bool _contentFilterEnabled = false;
+   bool _contentFilterDisablePending = false;
++  bool _hasPin = false;
++  bool _pinOpen = false;
++  bool _obscurePin = true;
+   String? _error;
+   bool _loading = true;
+ 
+@@ -77,6 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
+       _contentFilterEnabled = cfg.adultContentFilterEnabled;
+       _contentFilterDisablePending = pending
+           .any((r) => r.type == RequestType.contentFilterDisable);
++      _hasPin = cfg.hasInPersonPin;
+       // Auto-expand the Gmail section when it isn't configured yet.
+       _gmailOpen =
+           cfg.gmailAddress.isEmpty || cfg.gmailAppPassword.isEmpty;
+@@ -115,6 +121,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
+     _passwordController.dispose();
+     _partnerController.dispose();
+     _smsGatewayController.dispose();
++    _pinController.dispose();
++    _pinConfirmController.dispose();
+     _appPasswordsLinkRecognizer.dispose();
+     super.dispose();
+   }
+@@ -205,6 +213,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
+     await _load();
+   }
+ 
++  Future<void> _savePin() async {
++    final pin = _pinController.text.trim();
++    final confirm = _pinConfirmController.text.trim();
++    if (pin != confirm) {
++      _toast('PINs don\'t match', error: true);
++      return;
++    }
++    final res = await _api.setInPersonPin(pin);
++    if (res.ok) {
++      _pinController.clear();
++      _pinConfirmController.clear();
++      _toast(_hasPin ? 'PIN changed' : 'In-person PIN set up');
++    } else {
++      _toast(res.error ?? 'Could not save the PIN', error: true);
++    }
++    await _load();
++  }
++
++  Future<void> _removePin() async {
++    await _api.removeInPersonPin();
++    _pinController.clear();
++    _pinConfirmController.clear();
++    _toast('In-person PIN removed');
++    await _load();
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     if (_loading) {
+@@ -234,6 +268,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
+           const Divider(height: 40, color: AppColors.gray200),
+           _contentFilterSection(),
+           const Divider(height: 40, color: AppColors.gray200),
++          _pinSection(),
++          const Divider(height: 40, color: AppColors.gray200),
+           _debugLogSection(),
+         ],
+       ),
+@@ -563,6 +599,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
+     );
+   }
+ 
++  Widget _pinSection() {
++    return Column(
++      crossAxisAlignment: CrossAxisAlignment.start,
++      children: [
++        InkWell(
++          onTap: () => setState(() => _pinOpen = !_pinOpen),
++          child: Padding(
++            padding: const EdgeInsets.symmetric(vertical: 4),
++            child: Row(
++              children: [
++                Expanded(
++                  child: Text('IN-PERSON PIN', style: AppTheme.sectionLabel()),
++                ),
++                if (_hasPin) ...[
++                  _pendingLabel('PIN set'),
++                  const SizedBox(width: 8),
++                ],
++                Icon(_pinOpen ? Icons.expand_less : Icons.expand_more,
++                    size: 20, color: AppColors.gray500),
++              ],
++            ),
++          ),
++        ),
++        const SizedBox(height: 6),
++        const Text(
++          'A quick numeric PIN for unlocking a blocked app or site in person '
++          '— e.g. handing your partner the phone — instead of emailing for '
++          'approval. Using the PIN ALWAYS sends a tamper alert to your '
++          "approval partner(s) the moment it's used, so it can never bypass "
++          'blocking quietly.',
++          style: TextStyle(
++              fontSize: 12, color: AppColors.gray500, height: 1.5),
++        ),
++        if (_pinOpen) ...[
++          const SizedBox(height: 12),
++          TextField(
++            controller: _pinController,
++            obscureText: _obscurePin,
++            keyboardType: TextInputType.number,
++            decoration: InputDecoration(
++              hintText: _hasPin ? 'New 4-8 digit PIN' : '4-8 digit PIN',
++              suffixIcon: TextButton(
++                onPressed: () => setState(() => _obscurePin = !_obscurePin),
++                child: Text(_obscurePin ? 'Show' : 'Hide'),
++              ),
++            ),
++          ),
++          const SizedBox(height: 8),
++          TextField(
++            controller: _pinConfirmController,
++            obscureText: _obscurePin,
++            keyboardType: TextInputType.number,
++            decoration: const InputDecoration(hintText: 'Confirm PIN'),
++          ),
++          const SizedBox(height: 12),
++          Row(
++            children: [
++              Expanded(
++                child: FilledButton(
++                  onPressed: _savePin,
++                  style: FilledButton.styleFrom(
++                      padding: const EdgeInsets.symmetric(vertical: 12)),
++                  child: Text(_hasPin ? 'Change PIN' : 'Set PIN'),
++                ),
++              ),
++              if (_hasPin) ...[
++                const SizedBox(width: 8),
++                TextButton(
++                  onPressed: _removePin,
++                  style: TextButton.styleFrom(foregroundColor: AppColors.red),
++                  child: const Text('Remove'),
++                ),
++              ],
++            ],
++          ),
++        ],
++      ],
++    );
++  }
++
+   Widget _partnerRow(String email, {required Widget trailing}) {
+     return Container(
+       margin: const EdgeInsets.only(bottom: 6),
+diff --git a/lib/services/block_engine_service.dart b/lib/services/block_engine_service.dart
+index 62098ee..1d276c2 100644
+--- a/lib/services/block_engine_service.dart
++++ b/lib/services/block_engine_service.dart
+@@ -241,6 +241,29 @@ class BlockEngineService {
+     await NativeBridge.instance.notifyStateChanged();
+   }
+ 
++  /// Applies an unlock immediately, with NO email round-trip — used only by
++  /// the in-person PIN flow (LocalApiService.unlockWithPin). That flow fires
++  /// its own tamper alert as the safety net that normally would be "your
++  /// approver had to say yes"; this just writes the same state.json shape
++  /// applyReplies()'s unlock case would, so enforcement (JsonState.kt) picks
++  /// it up identically either way.
++  Future<void> applyDirectUnlock(BlockedItem item, String duration) async {
++    final state = await _storage.loadState();
++    final requests = await _storage.loadPendingRequests();
++    if (duration == 'indefinite') {
++      state.unlocks[item.key] =
++          const UnlockInfo(unlockedUntil: null, unlockedIndefinitely: true);
++    } else {
++      final until =
++          DateTime.now().add(Duration(minutes: int.parse(duration)));
++      state.unlocks[item.key] =
++          UnlockInfo(unlockedUntil: until, unlockedIndefinitely: false);
++    }
++    await _storage.saveState(state, requests);
++    _changes.add(null);
++    await NativeBridge.instance.notifyStateChanged();
++  }
++
+   // ---- Request creation (mirrors request_unlock / dashboard endpoints) ------
+ 
+   /// Ported from request_unlock() / dashboard_server request-unlock route.
+diff --git a/lib/services/local_api_service.dart b/lib/services/local_api_service.dart
+index 2844d2e..2202d2d 100644
+--- a/lib/services/local_api_service.dart
++++ b/lib/services/local_api_service.dart
+@@ -24,6 +24,7 @@ import '../models/unlock_state.dart';
+ import 'block_engine_service.dart';
+ import 'email_service.dart';
+ import 'native_bridge.dart';
++import 'pin_service.dart';
+ import 'storage_service.dart';
+ 
+ /// Result of a request-submitting action, mirroring the JSON the dashboard
+@@ -384,4 +385,64 @@ class LocalApiService {
+       return ApiResult.error("Couldn't send the request email: $e");
+     }
+   }
++
++  // ---- In-person PIN ----------------------------------------------------
++
++  static final RegExp _pinFormat = RegExp(r'^\d{4,8}$');
++
++  /// Sets (or changes) the in-person PIN. Only the salted hash is persisted
++  /// (see PinService/AppConfig.inPersonPinHash) — the PIN itself never
++  /// touches disk. This is config setup, not an unlock, so it applies
++  /// immediately like the rest of Settings.
++  Future<ApiResult> setInPersonPin(String pin) async {
++    final digits = pin.trim();
++    if (!_pinFormat.hasMatch(digits)) {
++      return ApiResult.error('PIN must be 4-8 digits.');
++    }
++    final salt = PinService.generateSalt();
++    final cfg = await _storage.loadConfig();
++    cfg.inPersonPinHash = PinService.hashPin(digits, salt);
++    cfg.inPersonPinSalt = salt;
++    await _storage.saveConfig(cfg);
++    return const ApiResult(ok: true, immediate: true);
++  }
++
++  /// Removes the in-person PIN — after this, unlockWithPin() always fails.
++  Future<ApiResult> removeInPersonPin() async {
++    final cfg = await _storage.loadConfig();
++    cfg.inPersonPinHash = '';
++    cfg.inPersonPinSalt = '';
++    await _storage.saveConfig(cfg);
++    return const ApiResult(ok: true, immediate: true);
++  }
++
++  /// Unlocks [item] right away if [pin] matches the configured in-person
++  /// PIN, bypassing the usual email-approval request entirely — meant for
++  /// when the approval partner is standing right there. Because this skips
++  /// approval, a tamper alert is ALWAYS sent to the partner(s) the instant
++  /// the PIN is used successfully, so a bypass can never happen silently.
++  Future<ApiResult> unlockWithPin(
++    BlockedItem item,
++    String pin, {
++    String duration = '30',
++  }) async {
++    final cfg = await _storage.loadConfig();
++    if (!cfg.hasInPersonPin) {
++      return ApiResult.error('No in-person PIN is set up yet — add one in '
++          'Settings first.');
++    }
++    final hash = PinService.hashPin(pin.trim(), cfg.inPersonPinSalt);
++    if (hash != cfg.inPersonPinHash) {
++      return ApiResult.error('Incorrect PIN.');
++    }
++    await _engine.applyDirectUnlock(item, duration);
++    final durationDesc =
++        duration == 'indefinite' ? 'until re-locked' : '$duration minutes';
++    await NativeBridge.instance.sendTamperAlert(
++      'pin_unlock',
++      detail: 'In-person PIN used to unlock "${item.name}" '
++          '(${item.kind.wire}) for $durationDesc.',
++    );
++    return const ApiResult(ok: true, immediate: true);
++  }
+ }
+diff --git a/lib/services/native_bridge.dart b/lib/services/native_bridge.dart
+index c312321..9ca5e42 100644
+--- a/lib/services/native_bridge.dart
++++ b/lib/services/native_bridge.dart
+@@ -106,6 +106,26 @@ class NativeBridge {
+ 
+   Future<void> clearDebugLog() => _invoke('clearDebugLog');
+ 
++  // ---- Tamper alerts ----------------------------------------------------
++
++  /// Fires a tamper alert email/text immediately from Dart, over the same
++  /// TamperAlertMailer path the native services use for uninstall/
++  /// accessibility/VPN tampering. Used by the in-person PIN unlock flow,
++  /// which bypasses the usual email-approval pipeline and must always
++  /// notify the approval partner as a safety net — so this call is never
++  /// optional/best-effort from the caller's point of view, even though
++  /// (like every native call here) it fails soft if the channel errors.
++  Future<void> sendTamperAlert(String reason, {String? detail}) async {
++    try {
++      await _channel.invokeMethod('sendTamperAlert', {
++        'reason': reason,
++        if (detail != null) 'detail': detail,
++      });
++    } on PlatformException {
++      // Swallow — same as other native calls.
++    }
++  }
++
+   Future<void> _invoke(String method) async {
+     try {
+       await _channel.invokeMethod(method);
+diff --git a/lib/services/pin_service.dart b/lib/services/pin_service.dart
+new file mode 100644
+index 0000000..2fb01b8
+--- /dev/null
++++ b/lib/services/pin_service.dart
+@@ -0,0 +1,30 @@
++/// PinService — hashing helper for the in-person PIN feature.
++///
++/// The PIN itself is never written to disk — only a salted SHA-256 hash
++/// (config.json's "in_person_pin_hash") plus the random salt used to compute
++/// it ("in_person_pin_salt"). A fresh random salt is generated every time the
++/// PIN is set/changed, so the same PIN never produces the same on-disk hash
++/// twice, and the hash can't be reversed via a precomputed table.
++library;
++
++import 'dart:convert';
++import 'dart:math';
++
++import 'package:crypto/crypto.dart';
++
++class PinService {
++  PinService._();
++
++  /// A random hex-encoded salt, regenerated every time the PIN is (re)set.
++  static String generateSalt({int bytes = 16}) {
++    final rand = Random.secure();
++    final values = List<int>.generate(bytes, (_) => rand.nextInt(256));
++    return values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
++  }
++
++  /// Salted SHA-256 hash of [pin], hex-encoded.
++  static String hashPin(String pin, String salt) {
++    final digest = sha256.convert(utf8.encode('$salt:$pin'));
++    return digest.toString();
++  }
++}
+diff --git a/lib/widgets/item_card.dart b/lib/widgets/item_card.dart
+index fbc7083..01a9790 100644
+--- a/lib/widgets/item_card.dart
++++ b/lib/widgets/item_card.dart
+@@ -21,6 +21,12 @@ class ItemCard extends StatelessWidget {
+   final VoidCallback onRequestRemove;
+   final VoidCallback? onCountdownExpired;
+ 
++  /// True once an in-person PIN has been configured in Settings — shows a
++  /// second "unlock with PIN" button alongside the normal email-request lock
++  /// icon when the item is locked.
++  final bool hasPin;
++  final VoidCallback? onUnlockWithPin;
++
+   const ItemCard({
+     super.key,
+     required this.status,
+@@ -28,6 +34,8 @@ class ItemCard extends StatelessWidget {
+     required this.onLockNow,
+     required this.onRequestRemove,
+     this.onCountdownExpired,
++    this.hasPin = false,
++    this.onUnlockWithPin,
+   });
+ 
+   @override
+@@ -84,6 +92,17 @@ class ItemCard extends StatelessWidget {
+               tooltip: 'Unlocked — lock now',
+               onTap: onLockNow,
+             ),
++          if (status.locked && hasPin && onUnlockWithPin != null) ...[
++            const SizedBox(width: 8),
++            _iconBtn(
++              bg: Colors.white,
++              border: AppColors.teal,
++              icon: Icons.vpn_key_outlined,
++              iconColor: AppColors.teal,
++              tooltip: 'Unlock with in-person PIN (sends a tamper alert)',
++              onTap: onUnlockWithPin!,
++            ),
++          ],
+           const SizedBox(width: 8),
+           _iconBtn(
+             bg: Colors.white,
+diff --git a/lib/widgets/pin_unlock_sheet.dart b/lib/widgets/pin_unlock_sheet.dart
+new file mode 100644
+index 0000000..4a70470
+--- /dev/null
++++ b/lib/widgets/pin_unlock_sheet.dart
+@@ -0,0 +1,171 @@
++/// PinUnlockSheet — bottom sheet for the in-person PIN unlock flow. Lets the
++/// user pick a duration (same choices as UnlockDurationSheet) and enter the
++/// PIN, returning both to the caller so LocalApiService.unlockWithPin() can
++/// verify the PIN and apply the unlock immediately — no email round-trip,
++/// but the caller always fires a tamper alert as the safety net for that.
++library;
++
++import 'package:flutter/material.dart';
++
++import '../theme/app_theme.dart';
++
++class PinUnlockResult {
++  final String duration;
++  final String pin;
++  const PinUnlockResult({required this.duration, required this.pin});
++}
++
++class PinUnlockSheet extends StatefulWidget {
++  final String itemName;
++  const PinUnlockSheet({super.key, required this.itemName});
++
++  static Future<PinUnlockResult?> show(BuildContext context, String itemName) {
++    return showModalBottomSheet<PinUnlockResult>(
++      context: context,
++      backgroundColor: AppColors.card,
++      isScrollControlled: true,
++      shape: const RoundedRectangleBorder(
++        borderRadius:
++            BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
++      ),
++      builder: (_) => PinUnlockSheet(itemName: itemName),
++    );
++  }
++
++  @override
++  State<PinUnlockSheet> createState() => _PinUnlockSheetState();
++}
++
++class _PinUnlockSheetState extends State<PinUnlockSheet> {
++  final _pinController = TextEditingController();
++  String _duration = '30';
++
++  @override
++  void dispose() {
++    _pinController.dispose();
++    super.dispose();
++  }
++
++  void _submit() {
++    final pin = _pinController.text.trim();
++    if (pin.isEmpty) return;
++    Navigator.of(context)
++        .pop(PinUnlockResult(duration: _duration, pin: pin));
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Padding(
++      padding:
++          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
++      child: SafeArea(
++        child: Padding(
++          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
++          child: Column(
++            mainAxisSize: MainAxisSize.min,
++            crossAxisAlignment: CrossAxisAlignment.start,
++            children: [
++              Center(
++                child: Container(
++                  width: 40,
++                  height: 4,
++                  margin: const EdgeInsets.only(bottom: 16),
++                  decoration: BoxDecoration(
++                    color: AppColors.gray200,
++                    borderRadius: BorderRadius.circular(999),
++                  ),
++                ),
++              ),
++              Text('Unlock with PIN — ${widget.itemName}',
++                  style: const TextStyle(
++                      fontSize: 17, fontWeight: FontWeight.w700)),
++              const SizedBox(height: 6),
++              const Text(
++                'For when your approval partner is right here. This skips '
++                'the email request and unlocks immediately — but always '
++                'sends them a tamper alert the moment the PIN is used.',
++                style: TextStyle(
++                    fontSize: 13, color: AppColors.gray500, height: 1.4),
++              ),
++              const SizedBox(height: 14),
++              _durationOption('5 minutes', '5'),
++              _durationOption('30 minutes', '30'),
++              _durationOption('1 hour', '60'),
++              _durationOption('Until I re-lock it', 'indefinite'),
++              const SizedBox(height: 10),
++              TextField(
++                controller: _pinController,
++                obscureText: true,
++                keyboardType: TextInputType.number,
++                autofocus: true,
++                onSubmitted: (_) => _submit(),
++                decoration: const InputDecoration(hintText: 'Enter PIN'),
++              ),
++              const SizedBox(height: 12),
++              Row(
++                children: [
++                  Expanded(
++                    child: OutlinedButton(
++                      style: OutlinedButton.styleFrom(
++                        foregroundColor: AppColors.gray500,
++                        side: const BorderSide(
++                            color: AppColors.gray200, width: 1.5),
++                        padding: const EdgeInsets.symmetric(vertical: 12),
++                      ),
++                      onPressed: () => Navigator.of(context).pop(),
++                      child: const Text('Cancel'),
++                    ),
++                  ),
++                  const SizedBox(width: 8),
++                  Expanded(
++                    child: FilledButton(
++                      onPressed: _submit,
++                      style: FilledButton.styleFrom(
++                          padding: const EdgeInsets.symmetric(vertical: 12)),
++                      child: const Text('Unlock'),
++                    ),
++                  ),
++                ],
++              ),
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _durationOption(String label, String value) {
++    final selected = _duration == value;
++    return Padding(
++      padding: const EdgeInsets.only(bottom: 8),
++      child: Material(
++        color:
++            selected ? AppColors.teal.withOpacity(0.12) : AppColors.gray100,
++        borderRadius: BorderRadius.circular(AppRadius.sm),
++        child: InkWell(
++          borderRadius: BorderRadius.circular(AppRadius.sm),
++          onTap: () => setState(() => _duration = value),
++          child: Container(
++            width: double.infinity,
++            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
++            child: Row(
++              children: [
++                Icon(
++                  selected
++                      ? Icons.radio_button_checked
++                      : Icons.radio_button_unchecked,
++                  size: 18,
++                  color: selected ? AppColors.teal : AppColors.gray500,
++                ),
++                const SizedBox(width: 10),
++                Text(label,
++                    style: const TextStyle(
++                        fontSize: 14.5, fontWeight: FontWeight.w600)),
++              ],
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 70a6702..f92ac60 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -37,6 +37,10 @@ dependencies:
+   # Opens links in the device's browser (e.g. the Gmail App Password page).
+   url_launcher: ^6.3.1
+ 
++  # Salted SHA-256 hashing for the in-person PIN — only the hash is ever
++  # persisted to config.json, never the PIN itself.
++  crypto: ^3.0.3
++
+ dev_dependencies:
+   flutter_test:
+     sdk: flutter
+-- 
+2.43.0
+

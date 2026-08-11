@@ -23,6 +23,7 @@ import '../services/local_api_service.dart';
 import '../services/native_bridge.dart';
 import '../theme/app_theme.dart';
 import '../widgets/item_card.dart';
+import '../widgets/pin_unlock_sheet.dart';
 import '../widgets/request_card.dart';
 import '../widgets/section_header.dart';
 import '../widgets/unlock_duration_sheet.dart';
@@ -41,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final TextEditingController _siteController = TextEditingController();
 
   StatusSnapshot? _snapshot;
+  bool _hasPin = false;
   Timer? _pollTimer;
   StreamSubscription<String>? _eventSub;
   StreamSubscription<void>? _engineSub;
@@ -75,7 +77,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _refresh() async {
     final snap = await _api.status();
-    if (mounted) setState(() => _snapshot = snap);
+    final cfg = await _api.getSettings();
+    if (mounted) {
+      setState(() {
+        _snapshot = snap;
+        _hasPin = cfg.hasInPersonPin;
+      });
+    }
   }
 
   void _confirm(String message, {bool error = false}) {
@@ -96,6 +104,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _confirm('Unlock request #${res.requestId} sent for "${s.item.name}"');
     } else {
       _confirm(res.error ?? 'Request failed', error: true);
+    }
+    _refresh();
+  }
+
+  Future<void> _unlockWithPin(ItemStatus s) async {
+    final result = await PinUnlockSheet.show(context, s.item.name);
+    if (result == null) return;
+    final res = await _api.unlockWithPin(s.item, result.pin,
+        duration: result.duration);
+    if (res.ok) {
+      _confirm(
+          'Unlocked "${s.item.name}" with PIN — your approval partner has '
+          'been alerted.');
+    } else {
+      _confirm(res.error ?? 'Could not unlock with that PIN', error: true);
     }
     _refresh();
   }
@@ -243,6 +266,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onLockNow: () => _lockNow(s),
                     onRequestRemove: () => _requestRemove(s),
                     onCountdownExpired: _refresh,
+                    hasPin: _hasPin,
+                    onUnlockWithPin: () => _unlockWithPin(s),
                   )),
             const SectionHeader('Add to block list', noApproval: true),
             _addAppCard(),

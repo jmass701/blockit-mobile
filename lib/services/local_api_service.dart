@@ -24,6 +24,7 @@ import '../models/unlock_state.dart';
 import 'block_engine_service.dart';
 import 'email_service.dart';
 import 'native_bridge.dart';
+import 'pin_service.dart';
 import 'storage_service.dart';
 
 /// Result of a request-submitting action, mirroring the JSON the dashboard
@@ -383,5 +384,65 @@ class LocalApiService {
     } catch (e) {
       return ApiResult.error("Couldn't send the request email: $e");
     }
+  }
+
+  // ---- In-person PIN ----------------------------------------------------
+
+  static final RegExp _pinFormat = RegExp(r'^\d{4,8}$');
+
+  /// Sets (or changes) the in-person PIN. Only the salted hash is persisted
+  /// (see PinService/AppConfig.inPersonPinHash) — the PIN itself never
+  /// touches disk. This is config setup, not an unlock, so it applies
+  /// immediately like the rest of Settings.
+  Future<ApiResult> setInPersonPin(String pin) async {
+    final digits = pin.trim();
+    if (!_pinFormat.hasMatch(digits)) {
+      return ApiResult.error('PIN must be 4-8 digits.');
+    }
+    final salt = PinService.generateSalt();
+    final cfg = await _storage.loadConfig();
+    cfg.inPersonPinHash = PinService.hashPin(digits, salt);
+    cfg.inPersonPinSalt = salt;
+    await _storage.saveConfig(cfg);
+    return const ApiResult(ok: true, immediate: true);
+  }
+
+  /// Removes the in-person PIN — after this, unlockWithPin() always fails.
+  Future<ApiResult> removeInPersonPin() async {
+    final cfg = await _storage.loadConfig();
+    cfg.inPersonPinHash = '';
+    cfg.inPersonPinSalt = '';
+    await _storage.saveConfig(cfg);
+    return const ApiResult(ok: true, immediate: true);
+  }
+
+  /// Unlocks [item] right away if [pin] matches the configured in-person
+  /// PIN, bypassing the usual email-approval request entirely — meant for
+  /// when the approval partner is standing right there. Because this skips
+  /// approval, a tamper alert is ALWAYS sent to the partner(s) the instant
+  /// the PIN is used successfully, so a bypass can never happen silently.
+  Future<ApiResult> unlockWithPin(
+    BlockedItem item,
+    String pin, {
+    String duration = '30',
+  }) async {
+    final cfg = await _storage.loadConfig();
+    if (!cfg.hasInPersonPin) {
+      return ApiResult.error('No in-person PIN is set up yet — add one in '
+          'Settings first.');
+    }
+    final hash = PinService.hashPin(pin.trim(), cfg.inPersonPinSalt);
+    if (hash != cfg.inPersonPinHash) {
+      return ApiResult.error('Incorrect PIN.');
+    }
+    await _engine.applyDirectUnlock(item, duration);
+    final durationDesc =
+        duration == 'indefinite' ? 'until re-locked' : '$duration minutes';
+    await NativeBridge.instance.sendTamperAlert(
+      'pin_unlock',
+      detail: 'In-person PIN used to unlock "${item.name}" '
+          '(${item.kind.wire}) for $durationDesc.',
+    );
+    return const ApiResult(ok: true, immediate: true);
   }
 }

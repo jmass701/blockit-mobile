@@ -241,6 +241,29 @@ class BlockEngineService {
     await NativeBridge.instance.notifyStateChanged();
   }
 
+  /// Applies an unlock immediately, with NO email round-trip — used only by
+  /// the in-person PIN flow (LocalApiService.unlockWithPin). That flow fires
+  /// its own tamper alert as the safety net that normally would be "your
+  /// approver had to say yes"; this just writes the same state.json shape
+  /// applyReplies()'s unlock case would, so enforcement (JsonState.kt) picks
+  /// it up identically either way.
+  Future<void> applyDirectUnlock(BlockedItem item, String duration) async {
+    final state = await _storage.loadState();
+    final requests = await _storage.loadPendingRequests();
+    if (duration == 'indefinite') {
+      state.unlocks[item.key] =
+          const UnlockInfo(unlockedUntil: null, unlockedIndefinitely: true);
+    } else {
+      final until =
+          DateTime.now().add(Duration(minutes: int.parse(duration)));
+      state.unlocks[item.key] =
+          UnlockInfo(unlockedUntil: until, unlockedIndefinitely: false);
+    }
+    await _storage.saveState(state, requests);
+    _changes.add(null);
+    await NativeBridge.instance.notifyStateChanged();
+  }
+
   // ---- Request creation (mirrors request_unlock / dashboard endpoints) ------
 
   /// Ported from request_unlock() / dashboard_server request-unlock route.

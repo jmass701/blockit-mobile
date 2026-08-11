@@ -32,6 +32,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _passwordController = TextEditingController();
   final _partnerController = TextEditingController();
   final _smsGatewayController = TextEditingController();
+  final _pinController = TextEditingController();
+  final _pinConfirmController = TextEditingController();
   late final TapGestureRecognizer _appPasswordsLinkRecognizer =
       TapGestureRecognizer()..onTap = _openAppPasswordsPage;
 
@@ -45,6 +47,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _smsGateways = [];
   bool _contentFilterEnabled = false;
   bool _contentFilterDisablePending = false;
+  bool _hasPin = false;
+  bool _pinOpen = false;
+  bool _obscurePin = true;
   String? _error;
   bool _loading = true;
 
@@ -77,6 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _contentFilterEnabled = cfg.adultContentFilterEnabled;
       _contentFilterDisablePending = pending
           .any((r) => r.type == RequestType.contentFilterDisable);
+      _hasPin = cfg.hasInPersonPin;
       // Auto-expand the Gmail section when it isn't configured yet.
       _gmailOpen =
           cfg.gmailAddress.isEmpty || cfg.gmailAppPassword.isEmpty;
@@ -115,6 +121,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _passwordController.dispose();
     _partnerController.dispose();
     _smsGatewayController.dispose();
+    _pinController.dispose();
+    _pinConfirmController.dispose();
     _appPasswordsLinkRecognizer.dispose();
     super.dispose();
   }
@@ -205,6 +213,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _load();
   }
 
+  Future<void> _savePin() async {
+    final pin = _pinController.text.trim();
+    final confirm = _pinConfirmController.text.trim();
+    if (pin != confirm) {
+      _toast('PINs don\'t match', error: true);
+      return;
+    }
+    final res = await _api.setInPersonPin(pin);
+    if (res.ok) {
+      _pinController.clear();
+      _pinConfirmController.clear();
+      _toast(_hasPin ? 'PIN changed' : 'In-person PIN set up');
+    } else {
+      _toast(res.error ?? 'Could not save the PIN', error: true);
+    }
+    await _load();
+  }
+
+  Future<void> _removePin() async {
+    await _api.removeInPersonPin();
+    _pinController.clear();
+    _pinConfirmController.clear();
+    _toast('In-person PIN removed');
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -233,6 +267,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _smsGatewaySection(),
           const Divider(height: 40, color: AppColors.gray200),
           _contentFilterSection(),
+          const Divider(height: 40, color: AppColors.gray200),
+          _pinSection(),
           const Divider(height: 40, color: AppColors.gray200),
           _debugLogSection(),
         ],
@@ -559,6 +595,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
           style: TextStyle(
               fontSize: 12, color: AppColors.gray500, height: 1.5),
         ),
+      ],
+    );
+  }
+
+  Widget _pinSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _pinOpen = !_pinOpen),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('IN-PERSON PIN', style: AppTheme.sectionLabel()),
+                ),
+                if (_hasPin) ...[
+                  _pendingLabel('PIN set'),
+                  const SizedBox(width: 8),
+                ],
+                Icon(_pinOpen ? Icons.expand_less : Icons.expand_more,
+                    size: 20, color: AppColors.gray500),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'A quick numeric PIN for unlocking a blocked app or site in person '
+          '— e.g. handing your partner the phone — instead of emailing for '
+          'approval. Using the PIN ALWAYS sends a tamper alert to your '
+          "approval partner(s) the moment it's used, so it can never bypass "
+          'blocking quietly.',
+          style: TextStyle(
+              fontSize: 12, color: AppColors.gray500, height: 1.5),
+        ),
+        if (_pinOpen) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _pinController,
+            obscureText: _obscurePin,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              hintText: _hasPin ? 'New 4-8 digit PIN' : '4-8 digit PIN',
+              suffixIcon: TextButton(
+                onPressed: () => setState(() => _obscurePin = !_obscurePin),
+                child: Text(_obscurePin ? 'Show' : 'Hide'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _pinConfirmController,
+            obscureText: _obscurePin,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(hintText: 'Confirm PIN'),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: _savePin,
+                  style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12)),
+                  child: Text(_hasPin ? 'Change PIN' : 'Set PIN'),
+                ),
+              ),
+              if (_hasPin) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: _removePin,
+                  style: TextButton.styleFrom(foregroundColor: AppColors.red),
+                  child: const Text('Remove'),
+                ),
+              ],
+            ],
+          ),
+        ],
       ],
     );
   }

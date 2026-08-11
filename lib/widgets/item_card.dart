@@ -21,6 +21,12 @@ class ItemCard extends StatelessWidget {
   final VoidCallback onRequestRemove;
   final VoidCallback? onCountdownExpired;
 
+  /// True once an in-person PIN has been configured in Settings — shows a
+  /// second "unlock with PIN" button alongside the normal email-request lock
+  /// icon when the item is locked.
+  final bool hasPin;
+  final VoidCallback? onUnlockWithPin;
+
   const ItemCard({
     super.key,
     required this.status,
@@ -28,6 +34,8 @@ class ItemCard extends StatelessWidget {
     required this.onLockNow,
     required this.onRequestRemove,
     this.onCountdownExpired,
+    this.hasPin = false,
+    this.onUnlockWithPin,
   });
 
   @override
@@ -84,6 +92,17 @@ class ItemCard extends StatelessWidget {
               tooltip: 'Unlocked — lock now',
               onTap: onLockNow,
             ),
+          if (status.locked && hasPin && onUnlockWithPin != null) ...[
+            const SizedBox(width: 8),
+            _iconBtn(
+              bg: Colors.white,
+              border: AppColors.teal,
+              icon: Icons.vpn_key_outlined,
+              iconColor: AppColors.teal,
+              tooltip: 'Unlock with in-person PIN (sends a tamper alert)',
+              onTap: onUnlockWithPin!,
+            ),
+          ],
           const SizedBox(width: 8),
           _iconBtn(
             bg: Colors.white,
