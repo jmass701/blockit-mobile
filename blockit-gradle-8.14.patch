@@ -1,0 +1,28 @@
+From 3969f95b01fa3751588fbb27c409b6c0b14f8eb3 Mon Sep 17 00:00:00 2001
+From: Jared Massie <you@example.com>
+Date: Fri, 14 Aug 2026 02:56:08 +0000
+Subject: [PATCH] Bump Gradle wrapper to 8.14.2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+CI's Flutter now requires Gradle >= 8.14.0 to apply the Flutter Gradle
+plugin (we were on 8.13). AGP stays at 8.11.1 — no compatibility issue,
+just Flutter's own minimum-Gradle check.
+---
+ android/gradle/wrapper/gradle-wrapper.properties | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/android/gradle/wrapper/gradle-wrapper.properties b/android/gradle/wrapper/gradle-wrapper.properties
+index 02767eb..53aec70 100644
+--- a/android/gradle/wrapper/gradle-wrapper.properties
++++ b/android/gradle/wrapper/gradle-wrapper.properties
+@@ -2,4 +2,4 @@ distributionBase=GRADLE_USER_HOME
+ distributionPath=wrapper/dists
+ zipStoreBase=GRADLE_USER_HOME
+ zipStorePath=wrapper/dists
+-distributionUrl=https\://services.gradle.org/distributions/gradle-8.13-all.zip
++distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.2-all.zip
+-- 
+2.43.0
+
