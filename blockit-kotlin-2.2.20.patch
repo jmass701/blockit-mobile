@@ -1,0 +1,35 @@
+From 5e57044f75101372f29a5ec165a62a72593f4399 Mon Sep 17 00:00:00 2001
+From: Jared Massie <you@example.com>
+Date: Fri, 14 Aug 2026 03:11:58 +0000
+Subject: [PATCH] Bump Kotlin to 2.2.20 for Flutter 3.47 compatibility
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+CI is now on Flutter stable 3.47.0, which hard-requires Kotlin >= 2.2.20
+(we were on 2.0.0) — this was the actual build failure. Gradle 8.14.2
+and AGP 8.11.1 only produced 'will soon be dropped' warnings this time,
+not failures, so left as-is for now; a future Flutter release will
+likely require bumping those too (Gradle >= 9.1.0, AGP >= 9.0.1), which
+is a bigger jump (AGP 9 changes the Gradle DSL) worth doing deliberately
+rather than reactively.
+---
+ android/settings.gradle | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/android/settings.gradle b/android/settings.gradle
+index 5818650..aefe60b 100644
+--- a/android/settings.gradle
++++ b/android/settings.gradle
+@@ -20,7 +20,7 @@ pluginManagement {
+ plugins {
+     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+     id "com.android.application" version "8.11.1" apply false
+-    id "org.jetbrains.kotlin.android" version "2.0.0" apply false
++    id "org.jetbrains.kotlin.android" version "2.2.20" apply false
+ }
+ 
+ include ":app"
+-- 
+2.43.0
+
