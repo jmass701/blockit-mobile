@@ -1,0 +1,251 @@
+From 944b5a27ed4be479a4e67d2e2054fd66bd9e7884 Mon Sep 17 00:00:00 2001
+From: Jared Massie <you@example.com>
+Date: Thu, 13 Aug 2026 00:58:07 +0000
+Subject: [PATCH] Offer in-person PIN from the unlock-request sheet; add
+ Approve/Deny email buttons
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The unlock duration sheet now shows a 'Use in-person PIN instead' option
+(when a PIN is configured) alongside the usual duration choices, so the
+in-person PIN is reachable from the same place as a normal unlock request.
+
+Approval emails now include HTML Approve/Deny buttons as mailto: links
+that pre-fill 'APPROVE [ref:N]' / 'DENY [ref:N]' — the partner taps a
+button and hits Send instead of typing a reply. There's no hosted
+backend here (same architecture as the Windows app), so a true
+zero-tap button isn't possible; this is the closest equivalent. Falls
+back to the existing plain-text reply instructions for clients that
+don't render HTML.
+---
+ lib/screens/home_screen.dart           |  8 ++-
+ lib/services/email_service.dart        | 62 +++++++++++++++++++++--
+ lib/widgets/unlock_duration_sheet.dart | 69 ++++++++++++++++++++++++--
+ 3 files changed, 128 insertions(+), 11 deletions(-)
+
+diff --git a/lib/screens/home_screen.dart b/lib/screens/home_screen.dart
+index b7ee851..662c10d 100644
+--- a/lib/screens/home_screen.dart
++++ b/lib/screens/home_screen.dart
+@@ -96,9 +96,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+   }
+ 
+   Future<void> _requestUnlock(ItemStatus s) async {
+-    final duration =
+-        await UnlockDurationSheet.show(context, s.item.name);
++    final duration = await UnlockDurationSheet.show(context, s.item.name,
++        hasPin: _hasPin);
+     if (duration == null) return;
++    if (duration == kUsePinSentinel) {
++      await _unlockWithPin(s);
++      return;
++    }
+     final res = await _api.requestUnlock(s.item, duration);
+     if (res.ok) {
+       _confirm('Unlock request #${res.requestId} sent for "${s.item.name}"');
+diff --git a/lib/services/email_service.dart b/lib/services/email_service.dart
+index 4e4b084..28f7bd9 100644
+--- a/lib/services/email_service.dart
++++ b/lib/services/email_service.dart
+@@ -20,6 +20,10 @@
+ ///  * Every reply's From address (lowercased) is returned, because partner_add
+ ///    (only approver_emails[0] may approve) and partner_invite (only the
+ ///    invitee may accept) are authorization-gated on sender identity.
++///  * The HTML part renders Approve/Deny buttons as mailto: links that
++///    pre-fill "APPROVE [ref:N]" / "DENY [ref:N]" — the approver taps a
++///    button, then Send, rather than typing a reply. See sendApprovalEmail()
++///    for why this can't be a true one-tap action without a hosted backend.
+ library;
+ 
+ import 'package:enough_mail/enough_mail.dart';
+@@ -107,10 +111,18 @@ class EmailService {
+   /// just that list (used for partner_add/remove/invite, which only one
+   /// specific person may act on); otherwise sends to every approval partner.
+   ///
+-  /// Note: unlike the Windows app we do NOT render mailto: Approve/Deny buttons
+-  /// (they're unreliable on Android) — the partner replies from any mail client
+-  /// with "APPROVE [ref:N]" / "DENY [ref:N]", or a genuine Reply of just
+-  /// "APPROVE"/"DENY". The [ref:<id>] tag is embedded plainly in the body.
++  /// Includes big Approve/Deny "buttons" in the HTML part, each a mailto:
++  /// link that pre-fills a reply with just "APPROVE [ref:N]" / "DENY [ref:N]"
++  /// — so the partner taps a button, then Send, instead of typing a reply
++  /// from scratch. This can't be a true one-tap action: there's no backend
++  /// server here (everything is on-device SMTP/IMAP, like the Windows app),
++  /// so nothing can receive a button click directly — the partner's mail app
++  /// still has to actually send the pre-filled reply for it to be seen. The
++  /// [ref:<id>] tag is what makes that pre-filled reply matchable even when
++  /// (as is normal for a mailto-composed message) it carries no In-Reply-To
++  /// threading headers — see fetchApprovalReplies()'s two match paths. The
++  /// plain-text part keeps the original type-APPROVE/DENY instructions as a
++  /// fallback for mail clients that don't render HTML.
+   Future<SentApproval> sendApprovalEmail(
+     AppConfig cfg,
+     int reqId,
+@@ -131,11 +143,35 @@ class EmailService {
+         'If your reply does not thread properly, include this tag so BlockIT '
+         'can match it: $refTag';
+ 
++    final approveUri = _replyMailto(cfg.gmailAddress, 'APPROVE $refTag');
++    final denyUri = _replyMailto(cfg.gmailAddress, 'DENY $refTag');
++    final html = '''
++<div style="font-family: -apple-system, Roboto, Arial, sans-serif; font-size: 15px; color: #111827; line-height: 1.5;">
++  <p>${_escapeHtml(description)}</p>
++  <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 20px 0;">
++    <tr>
++      <td style="padding-right: 10px;">
++        <a href="$approveUri" style="display: inline-block; background: #16A34A; color: #ffffff; text-decoration: none; font-weight: 700; padding: 12px 22px; border-radius: 8px;">Approve</a>
++      </td>
++      <td>
++        <a href="$denyUri" style="display: inline-block; background: #DC2626; color: #ffffff; text-decoration: none; font-weight: 700; padding: 12px 22px; border-radius: 8px;">Deny</a>
++      </td>
++    </tr>
++  </table>
++  <p style="color: #6B7280; font-size: 13px;">
++    Tapping a button opens a reply pre-filled with APPROVE or DENY — you
++    still need to hit Send in your mail app. You can also just reply to this
++    email yourself with the word APPROVE or DENY.
++  </p>
++</div>
++''';
++
+     final message = Message()
+       ..from = Address(cfg.gmailAddress)
+       ..recipients.addAll(to)
+       ..subject = kApprovalSubject
+       ..text = body
++      ..html = html
+       // mailer lets us pin a Message-ID via a custom header so the value we
+       // store matches what the recipient's client threads against.
+       ..headers['Message-ID'] = messageId;
+@@ -144,6 +180,24 @@ class EmailService {
+     return SentApproval(messageId);
+   }
+ 
++  /// A mailto: URI that opens a new message addressed back to [gmailAddress]
++  /// with the approval subject and [prefilledBody] already filled in — the
++  /// "button" behind the Approve/Deny links.
++  Uri _replyMailto(String gmailAddress, String prefilledBody) => Uri(
++        scheme: 'mailto',
++        path: gmailAddress,
++        queryParameters: {
++          'subject': 'Re: $kApprovalSubject',
++          'body': prefilledBody,
++        },
++      );
++
++  String _escapeHtml(String s) => s
++      .replaceAll('&', '&amp;')
++      .replaceAll('<', '&lt;')
++      .replaceAll('>', '&gt;')
++      .replaceAll('"', '&quot;');
++
+   // ---- IMAP poll ------------------------------------------------------------
+ 
+   /// Fetches unread approval replies from any current partner and marks them
+diff --git a/lib/widgets/unlock_duration_sheet.dart b/lib/widgets/unlock_duration_sheet.dart
+index 21799a4..a98a452 100644
+--- a/lib/widgets/unlock_duration_sheet.dart
++++ b/lib/widgets/unlock_duration_sheet.dart
+@@ -2,18 +2,38 @@
+ /// equivalent of the web dashboard's #unlockModal (5 min / 30 min / 1 hour /
+ /// until re-locked). Returns the chosen duration as one of "5" / "30" / "60" /
+ /// "indefinite" (the exact wire values dashboard_server's VALID_DURATIONS
+-/// accepts), or null if cancelled.
++/// accepts), the sentinel [kUsePinSentinel] if the user picked "Use in-person
++/// PIN instead", or null if cancelled.
+ library;
+ 
+ import 'package:flutter/material.dart';
+ 
+ import '../theme/app_theme.dart';
+ 
++/// Returned by [UnlockDurationSheet.show] when the user chose the in-person
++/// PIN path instead of an email request. Not a valid duration value itself —
++/// the caller (HomeScreen._requestUnlock) checks for it before treating the
++/// result as a duration.
++const String kUsePinSentinel = 'use_pin';
++
+ class UnlockDurationSheet extends StatelessWidget {
+   final String itemName;
+-  const UnlockDurationSheet({super.key, required this.itemName});
+ 
+-  static Future<String?> show(BuildContext context, String itemName) {
++  /// Whether an in-person PIN is configured — shows the "Use in-person PIN
++  /// instead" option only when true, since there's nothing to use otherwise.
++  final bool hasPin;
++
++  const UnlockDurationSheet({
++    super.key,
++    required this.itemName,
++    this.hasPin = false,
++  });
++
++  static Future<String?> show(
++    BuildContext context,
++    String itemName, {
++    bool hasPin = false,
++  }) {
+     return showModalBottomSheet<String>(
+       context: context,
+       backgroundColor: AppColors.card,
+@@ -21,7 +41,7 @@ class UnlockDurationSheet extends StatelessWidget {
+         borderRadius:
+             BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+       ),
+-      builder: (_) => UnlockDurationSheet(itemName: itemName),
++      builder: (_) => UnlockDurationSheet(itemName: itemName, hasPin: hasPin),
+     );
+   }
+ 
+@@ -59,7 +79,46 @@ class UnlockDurationSheet extends StatelessWidget {
+             _option(context, '30 minutes', '30'),
+             _option(context, '1 hour', '60'),
+             _option(context, 'Until I re-lock it', 'indefinite'),
+-            const SizedBox(height: 6),
++            if (hasPin) ...[
++              const SizedBox(height: 6),
++              const Padding(
++                padding: EdgeInsets.symmetric(vertical: 4),
++                child: Row(
++                  children: [
++                    Expanded(child: Divider(color: AppColors.gray200)),
++                    Padding(
++                      padding: EdgeInsets.symmetric(horizontal: 8),
++                      child: Text('or',
++                          style: TextStyle(
++                              fontSize: 12, color: AppColors.gray500)),
++                    ),
++                    Expanded(child: Divider(color: AppColors.gray200)),
++                  ],
++                ),
++              ),
++              const SizedBox(height: 6),
++              SizedBox(
++                width: double.infinity,
++                child: OutlinedButton.icon(
++                  onPressed: () =>
++                      Navigator.of(context).pop(kUsePinSentinel),
++                  icon: const Icon(Icons.vpn_key_outlined, size: 18),
++                  label: const Text('Use in-person PIN instead'),
++                  style: OutlinedButton.styleFrom(
++                    foregroundColor: AppColors.teal,
++                    side: const BorderSide(color: AppColors.teal, width: 1.5),
++                    padding: const EdgeInsets.symmetric(vertical: 12),
++                  ),
++                ),
++              ),
++              const SizedBox(height: 6),
++              const Text(
++                'Skips the email request and unlocks immediately — but '
++                'always sends your approval partner a tamper alert.',
++                style: TextStyle(fontSize: 11.5, color: AppColors.gray500),
++              ),
++            ],
++            const SizedBox(height: 10),
+             SizedBox(
+               width: double.infinity,
+               child: OutlinedButton(
+-- 
+2.43.0
+
